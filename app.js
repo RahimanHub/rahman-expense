@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.5';
+const APP_VERSION = '2.6';
 const APP_CURRENCY = 'KWD';
 const CURRENCY_DECIMALS = 3;
 const DB_NAME = 'rahman-expense-v2-db';
@@ -43,7 +43,14 @@ const MERCHANT_HINTS = [
   [/uber|careem|taxi/i, ['Transport','Taxi']],
   [/cinema|netflix|spotify|youtube premium|subscription/i, ['Entertainment','Subscriptions']],
   [/hotel|airways|airline|booking\.com|expedia/i, ['Travel','Other']]
+,
+  [/parking|municipal park|pumc/i, ['Transport','Parking']],
+  [/station|service station/i, ['Transport','Fuel']]
 ];
+
+const STATEMENT_TRANSFER_HINT = /minimum due|card payment|credit card payment|settlement|outward instant payment|wamd|transfer(?:red)? to|fund transfer|payment to:/i;
+const STATEMENT_INCOME_HINT = /salary|deposit|cash deposit|refund|reversal|cashback|credit received|transfer received|incoming transfer/i;
+const GENERIC_STATEMENT_WORDS = /point of sale purchase transaction|pos purchase|purchase transaction|card transaction|outward instant payment|minimum due settlement|credit card|transaction|payment/gi;
 
 const defaultState = () => ({
   version: APP_VERSION,
@@ -74,6 +81,8 @@ let month = currentMonth();
 let txFilter = { search: '', type: 'all', category: 'all' };
 let scanObjectUrl = null;
 let pendingReceiptFile = null;
+let pendingStatementRows = [];
+let pendingStatementFileName = '';
 let modalTxId = null;
 let cloudClient = null;
 let cloudSyncTimer = null;
@@ -653,7 +662,7 @@ function transactionsView(){
       </div>
       <div class="list">${list.length?list.map(txRow).join(''):'<div class="empty"><b>No transactions found</b>Try another filter or add a transaction.</div>'}</div>
     </div>`;
-  return shell(content,'Transactions','Search, review and correct every entry.',`<button class="btn" data-action="scan">📷 Scan</button><button class="btn primary" data-action="add">+ Add transaction</button>`);
+  return shell(content,'Transactions','Search, review and correct every entry.',`<button class="btn" data-action="statement-import">📄 Import statement</button><button class="btn" data-action="scan">📷 Scan</button><button class="btn primary" data-action="add">+ Add transaction</button>`);
 }
 
 function budgetsView(){
@@ -735,6 +744,11 @@ function settingsView(){
         <p class="subtle">Export a private JSON backup. On iPhone, “Share backup” opens the share sheet so you can choose Google Drive if installed.</p>
         <div class="actions"><button class="btn" data-action="backup-export">Export backup</button><button class="btn" data-action="backup-share">Share backup</button><label class="btn soft">Import backup<input type="file" accept="application/json" id="backup-import" hidden /></label></div>
       </div>
+      <div class="card"><h3>Bank / credit-card statement import</h3>
+        <p class="subtle">Import PDF, CSV or a statement image. Rahman Expense reads transactions one by one, suggests categories, flags repayments/transfers, and checks duplicates before saving.</p>
+        <div class="actions"><button class="btn primary" type="button" data-action="statement-import">📄 Import statement</button></div>
+        <div class="subtle" style="margin-top:10px">Files are processed temporarily in the browser and are not stored in cloud sync.</div>
+      </div>
       <div class="card about-card"><h3>About Rahman Expense</h3>
         <div class="about-line"><span>Application</span><b>Rahman Expense</b></div>
         <div class="about-line"><span>Version</span><b>v${APP_VERSION}</b></div>
@@ -771,6 +785,7 @@ function bindView(){
   document.querySelectorAll('[data-month-shift]').forEach(el=>el.addEventListener('click',()=>shiftMonth(Number(el.dataset.monthShift))));
   document.querySelectorAll('[data-action="add"]').forEach(el=>el.addEventListener('click',()=>openTransactionModal()));
   document.querySelectorAll('[data-action="scan"]').forEach(el=>el.addEventListener('click',quickScanReceipt));
+  document.querySelectorAll('[data-action="statement-import"]').forEach(el=>el.addEventListener('click',chooseStatementFile));
   document.querySelectorAll('[data-edit-tx]').forEach(el=>el.addEventListener('click',ev=>{ev.stopPropagation();openTransactionModal(el.dataset.editTx)}));
   document.querySelectorAll('[data-open-tx]').forEach(el=>el.addEventListener('click',()=>openTransactionModal(el.dataset.openTx)));
   document.querySelectorAll('[data-summary-link]').forEach(el=>el.addEventListener('click',()=>openLinkedSection(el.dataset.summaryLink)));
@@ -887,7 +902,7 @@ function openTransactionModal(id=null,scan=false){
 
 function receiptScannerHtml(){
   return `<div class="scan-box" style="margin-top:16px">
-    <div class="scan-preview"><div id="receipt-image"><div style="width:110px;height:110px;border-radius:12px;background:var(--panel-soft);display:grid;place-items:center;font-size:34px">🧾</div></div><div><strong>Smart receipt scan</strong><div class="scan-status" id="scan-status">Take a photo or choose an invoice. Rahman Expense will read the total, merchant, date and suggest a category.</div><div class="actions" style="margin-top:10px"><button class="btn soft" type="button" id="receipt-camera-btn">📷 Take photo</button><button class="btn" type="button" id="receipt-gallery-btn">Choose image</button><input id="receipt-file-camera" type="file" accept="image/*" capture="environment" class="visually-hidden-file" /><input id="receipt-file" type="file" accept="image/*" class="visually-hidden-file" /></div></div></div>
+    <div class="scan-preview"><div id="receipt-image"><div style="width:110px;height:110px;border-radius:12px;background:var(--panel-soft);display:grid;place-items:center;font-size:34px">🧾</div></div><div><strong>Smart receipt scan</strong><div class="scan-status" id="scan-status">Take a photo, choose an image, or upload a PDF invoice. Rahman Expense will read the total, merchant, date and suggest a category.</div><div class="actions" style="margin-top:10px"><button class="btn soft" type="button" id="receipt-camera-btn">📷 Take photo</button><button class="btn" type="button" id="receipt-gallery-btn">Choose image</button><button class="btn" type="button" id="receipt-pdf-btn">📄 Upload PDF</button><input id="receipt-file-camera" type="file" accept="image/*" capture="environment" class="visually-hidden-file" /><input id="receipt-file" type="file" accept="image/*" class="visually-hidden-file" /><input id="receipt-pdf-file" type="file" accept="application/pdf,.pdf" class="visually-hidden-file" /></div></div></div>
   </div>`;
 }
 
@@ -934,11 +949,14 @@ async function deleteTransaction(id){
 function bindScanner(){
   const camera=document.getElementById('receipt-file-camera');
   const gallery=document.getElementById('receipt-file');
+  const pdf=document.getElementById('receipt-pdf-file');
   const cameraBtn=document.getElementById('receipt-camera-btn');
   const galleryBtn=document.getElementById('receipt-gallery-btn');
+  const pdfBtn=document.getElementById('receipt-pdf-btn');
   if(cameraBtn&&camera) cameraBtn.addEventListener('click',()=>camera.click());
   if(galleryBtn&&gallery) galleryBtn.addEventListener('click',()=>gallery.click());
-  [camera,gallery].forEach(el=>{
+  if(pdfBtn&&pdf) pdfBtn.addEventListener('click',()=>pdf.click());
+  [camera,gallery,pdf].forEach(el=>{
     if(el) el.addEventListener('change',async e=>{
       const f=e.target.files?.[0];
       if(f) await scanReceipt(f);
@@ -960,15 +978,23 @@ async function loadTesseract(){
 
 async function scanReceipt(file){
   pendingReceiptFile=file;
-  if(scanObjectUrl) URL.revokeObjectURL(scanObjectUrl);
-  scanObjectUrl=URL.createObjectURL(file);
-  document.getElementById('receipt-image').innerHTML=`<img alt="Receipt preview" src="${scanObjectUrl}" />`;
   const status=document.getElementById('scan-status');
-  status.innerHTML='<strong>Reading receipt…</strong> Local OCR is processing the image.';
+  let text='';
   try{
-    const T=await loadTesseract();
-    const result=await T.recognize(file,'eng',{logger:m=>{if(m.status==='recognizing text') status.textContent=`Reading receipt… ${Math.round((m.progress||0)*100)}%`;}});
-    const text=result?.data?.text||'';
+    if(file.type==='application/pdf' || /\.pdf$/i.test(file.name||'')){
+      if(scanObjectUrl){ URL.revokeObjectURL(scanObjectUrl); scanObjectUrl=null; }
+      document.getElementById('receipt-image').innerHTML=`<div class="pdf-file-preview">📄<small>${escapeHtml(file.name||'PDF invoice')}</small></div>`;
+      status.innerHTML='<strong>Reading PDF invoice…</strong> Extracting text locally in your browser.';
+      text=await extractPdfText(file,(msg)=>{status.textContent=msg;},6);
+    }else{
+      if(scanObjectUrl) URL.revokeObjectURL(scanObjectUrl);
+      scanObjectUrl=URL.createObjectURL(file);
+      document.getElementById('receipt-image').innerHTML=`<img alt="Receipt preview" src="${scanObjectUrl}" />`;
+      status.innerHTML='<strong>Reading receipt…</strong> Local OCR is processing the image.';
+      const T=await loadTesseract();
+      const result=await T.recognize(file,'eng',{logger:m=>{if(m.status==='recognizing text') status.textContent=`Reading receipt… ${Math.round((m.progress||0)*100)}%`;}});
+      text=result?.data?.text||'';
+    }
     const parsed=parseReceiptText(text);
     if(parsed.amount) document.getElementById('f-amount').value=parsed.amount;
     if(parsed.date) document.getElementById('f-date').value=parsed.date;
@@ -983,6 +1009,267 @@ async function scanReceipt(file){
   }catch(err){
     status.innerHTML='<strong>Automatic OCR is unavailable right now.</strong> The photo is still not stored; enter the details manually and save.';
   }
+}
+
+
+async function loadPdfJs(){
+  const pdfjs=await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.mjs');
+  if(pdfjs?.GlobalWorkerOptions) pdfjs.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.mjs';
+  return pdfjs;
+}
+
+function groupPdfTextItems(items=[]){
+  const rows=[];
+  for(const item of items){
+    const str=String(item?.str||'').trim(); if(!str) continue;
+    const x=Number(item?.transform?.[4]||0), y=Number(item?.transform?.[5]||0);
+    let row=rows.find(r=>Math.abs(r.y-y)<=3.5);
+    if(!row){ row={y,items:[]}; rows.push(row); }
+    row.items.push({x,str});
+  }
+  rows.sort((a,b)=>b.y-a.y);
+  return rows.map(r=>r.items.sort((a,b)=>a.x-b.x).map(i=>i.str).join(' ').replace(/\s+/g,' ').trim()).filter(Boolean);
+}
+
+async function extractPdfText(file,onProgress=()=>{},maxPages=40){
+  const pdfjs=await loadPdfJs();
+  const data=new Uint8Array(await file.arrayBuffer());
+  const pdf=await pdfjs.getDocument({data}).promise;
+  const limit=Math.min(pdf.numPages,maxPages);
+  const all=[];
+  for(let i=1;i<=limit;i++){
+    onProgress(`Reading PDF page ${i} of ${limit}…`);
+    const page=await pdf.getPage(i);
+    const tc=await page.getTextContent();
+    all.push(...groupPdfTextItems(tc.items||[]));
+  }
+  let text=all.join('\n');
+  if(text.replace(/\s/g,'').length<80 && pdf.numPages){
+    // Scanned-image PDF fallback: OCR a bounded number of pages locally.
+    const T=await loadTesseract();
+    const ocr=[]; const ocrLimit=Math.min(pdf.numPages,8);
+    for(let i=1;i<=ocrLimit;i++){
+      onProgress(`Scanned PDF detected · OCR page ${i} of ${ocrLimit}…`);
+      const page=await pdf.getPage(i);
+      const viewport=page.getViewport({scale:1.35});
+      const canvas=document.createElement('canvas');
+      canvas.width=Math.ceil(viewport.width); canvas.height=Math.ceil(viewport.height);
+      await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+      const result=await T.recognize(canvas,'eng');
+      ocr.push(result?.data?.text||'');
+      canvas.width=1; canvas.height=1;
+    }
+    text=ocr.join('\n');
+  }
+  return text;
+}
+
+function chooseStatementFile(){
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='application/pdf,.pdf,text/csv,.csv,image/*';
+  input.style.position='fixed'; input.style.left='-9999px'; input.style.opacity='0';
+  document.body.appendChild(input);
+  input.addEventListener('change',async()=>{
+    const file=input.files?.[0]; input.remove(); if(!file) return;
+    await importStatementFile(file);
+  },{once:true});
+  input.click();
+}
+
+function showStatementProcessing(fileName){
+  modalRoot.innerHTML=`<div class="modal-backdrop"><div class="modal statement-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><h3>Import statement</h3><div class="subtle">${escapeHtml(fileName)}</div></div></div><div class="modal-body"><div class="statement-processing"><div class="processing-spinner"></div><b id="statement-process-title">Reading statement…</b><div class="subtle" id="statement-process-status">Preparing the file.</div></div></div></div></div>`;
+}
+function setStatementProgress(msg){ const el=document.getElementById('statement-process-status'); if(el) el.textContent=msg; }
+
+async function importStatementFile(file){
+  showStatementProcessing(file.name||'Statement');
+  try{
+    let rows=[];
+    const lower=String(file.name||'').toLowerCase();
+    if(file.type==='text/csv' || lower.endsWith('.csv')){
+      setStatementProgress('Reading CSV rows…');
+      rows=parseStatementCsv(await file.text());
+    }else if(file.type==='application/pdf' || lower.endsWith('.pdf')){
+      const text=await extractPdfText(file,setStatementProgress,50);
+      rows=parseStatementText(text);
+    }else if((file.type||'').startsWith('image/')){
+      setStatementProgress('Running local OCR on the statement image…');
+      const T=await loadTesseract();
+      const result=await T.recognize(file,'eng',{logger:m=>{if(m.status==='recognizing text') setStatementProgress(`Reading statement image… ${Math.round((m.progress||0)*100)}%`);}});
+      rows=parseStatementText(result?.data?.text||'');
+    }else throw new Error('Use a PDF, CSV or image statement.');
+    rows=rows.filter(r=>r.amount>0 && r.date);
+    if(!rows.length) throw new Error('No transaction rows were detected. Try a text-based PDF/CSV or a clearer image.');
+    rows=rows.slice(0,500).map((r,i)=>prepareStatementRow(r,i));
+    pendingStatementRows=rows; pendingStatementFileName=file.name||'Statement';
+    showStatementReview(rows,pendingStatementFileName);
+  }catch(err){
+    modalRoot.innerHTML='';
+    toast(`Statement import: ${err?.message||'Could not read this file.'}`);
+  }
+}
+
+function parseDateFlexible(raw=''){
+  const m=String(raw).trim().match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b/);
+  if(!m){ const y=String(raw).trim().match(/\b(20\d{2})[\/.-](\d{1,2})[\/.-](\d{1,2})\b/); return y?`${y[1]}-${String(y[2]).padStart(2,'0')}-${String(y[3]).padStart(2,'0')}`:''; }
+  let y=Number(m[3]); if(y<100) y+=2000;
+  return `${y}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+}
+function parseMoneyValue(raw=''){
+  const cleaned=String(raw).replace(/KWD|KD|د\.ك/gi,'').replace(/,/g,'').replace(/[^0-9.\-]/g,'');
+  const v=Number(cleaned); return Number.isFinite(v)?Math.abs(v):0;
+}
+function normalizeStatementText(s=''){ return String(s).replace(/\s+/g,' ').trim(); }
+function cleanStatementNarration(text=''){
+  return normalizeStatementText(text)
+    .replace(GENERIC_STATEMENT_WORDS,' ')
+    .replace(/\b(?:KWD|KD|KW)\b/gi,' ')
+    .replace(/\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b/g,' ')
+    .replace(/\b\d{1,2}:(?:\d{0,2})?(?::\d{2})?-?\b/g,' ')
+    .replace(/\s*[,;]+\s*/g,' ')
+    .replace(/\s+/g,' ').trim();
+}
+function deriveStatementMerchant(narration=''){
+  const raw=normalizeStatementText(narration);
+  if(/minimum due|credit card.*settlement|card payment/i.test(raw)) return 'Credit Card Payment';
+  if(/wamd/i.test(raw)) return 'WAMD Payment';
+  let clean=cleanStatementNarration(raw)
+    .replace(/\b(?:ref(?:erence)?|reference no|transaction id|purpose)[:#]?\s*[A-Z0-9\/-]+/gi,' ')
+    .replace(/\b\d{6,}\b/g,' ')
+    .replace(/\s+/g,' ').trim();
+  const to=clean.match(/(?:to|at)[:\s]+([A-Za-z][A-Za-z0-9 '&.\/-]{2,60})/i);
+  if(to) clean=to[1];
+  return (clean||raw).slice(0,80);
+}
+function statementTypeFor(narration='',credit=0,debit=0,rawAmount=''){
+  if(STATEMENT_TRANSFER_HINT.test(narration)) return 'transfer';
+  if(credit>0 || STATEMENT_INCOME_HINT.test(narration) || /\bCR\b|credit/i.test(rawAmount)) return 'income';
+  return 'expense';
+}
+function simpleHash(input=''){
+  let h1=0x811c9dc5;
+  for(let i=0;i<input.length;i++){ h1^=input.charCodeAt(i); h1=Math.imul(h1,0x01000193); }
+  return (h1>>>0).toString(16).padStart(8,'0');
+}
+function statementImportId(r){
+  return simpleHash([r.date,r.type,n(r.amount).toFixed(3),String(r.reference||'').toLowerCase(),normalizeStatementText(r.narration||r.merchant||'').toLowerCase()].join('|'));
+}
+function transactionHasImportId(t,id){ return String(t.note||'').includes(`[Import ID: ${id}]`); }
+function isStatementDuplicate(r){
+  const id=r.importId||statementImportId(r);
+  if(state.transactions.some(t=>transactionHasImportId(t,id))) return true;
+  return state.transactions.some(t=>{
+    if(t.date!==r.date || t.type!==r.type || Math.abs(n(t.amount)-n(r.amount))>0.0005) return false;
+    if(r.reference && String(t.note||'').toLowerCase().includes(String(r.reference).toLowerCase())) return true;
+    return normalizeStatementText(t.merchant||'').toLowerCase()===normalizeStatementText(r.merchant||'').toLowerCase();
+  });
+}
+function prepareStatementRow(r,index){
+  const type=r.type||statementTypeFor(r.narration,r.credit,r.debit,r.rawAmount);
+  const merchant=r.merchant||deriveStatementMerchant(r.narration);
+  const suggestion=type==='expense'?suggestCategory(merchant,r.narration):['Banking','Other'];
+  const row={...r,index,type,merchant,category:r.category||suggestion[0],subcategory:r.subcategory||suggestion[1],selected:true};
+  row.importId=statementImportId(row); row.duplicate=isStatementDuplicate(row); if(row.duplicate) row.selected=false;
+  return row;
+}
+
+function parseStatementText(text=''){
+  const rawLines=String(text).split(/\r?\n/).map(normalizeStatementText).filter(Boolean);
+  const chunks=[]; let current=null;
+  const dateStart=/^(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|20\d{2}[\/.-]\d{1,2}[\/.-]\d{1,2})\b/;
+  for(const line of rawLines){
+    const dm=line.match(dateStart);
+    if(dm){ if(current) chunks.push(current); current={dateRaw:dm[1],text:line}; }
+    else if(current && !/tran date|transaction date|narration|description|reference|withdrawal|deposit|balance|debit|credit/i.test(line)) current.text+=` ${line}`;
+  }
+  if(current) chunks.push(current);
+  return chunks.map(c=>{
+    const date=parseDateFlexible(c.dateRaw); const full=c.text;
+    const decimals=[...full.matchAll(/(?:KWD|KD)?\s*[-+]?\d{1,9}(?:,\d{3})*\.\d{2,3}\b/gi)].map(m=>({raw:m[0],v:parseMoneyValue(m[0]),index:m.index||0})).filter(x=>x.v>=0);
+    if(!decimals.length) return null;
+    // In bank statements the last decimal is normally running balance; in credit-card statements it is usually the transaction amount.
+    const hasBalanceHeader=/\bbalance\b/i.test(text.slice(0,1500));
+    const amountToken=hasBalanceHeader && decimals.length>=2 ? decimals[decimals.length-2] : decimals[decimals.length-1];
+    const balance=hasBalanceHeader && decimals.length>=2 ? decimals[decimals.length-1].v : 0;
+    const beforeAmount=full.slice(0,amountToken.index);
+    const refMatches=[...beforeAmount.matchAll(/(?:\b\d{3,}(?:\/\d+)+\b|\b\d{5,}\b)/g)];
+    const reference=refMatches.length?refMatches[refMatches.length-1][0]:'';
+    let narration=full.replace(c.dateRaw,' ');
+    for(const a of decimals) narration=narration.replace(a.raw,' ');
+    if(reference) narration=narration.replace(reference,' ');
+    narration=normalizeStatementText(narration);
+    const rawAmount=amountToken.raw;
+    const type=statementTypeFor(narration,0,0,rawAmount);
+    return {date,narration,reference,amount:amountToken.v,type,balance,rawAmount};
+  }).filter(Boolean);
+}
+
+function parseDelimitedLine(line,delimiter){
+  const out=[]; let cur='',quote=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"'){ if(quote&&line[i+1]==='"'){cur+='"';i++;} else quote=!quote; }
+    else if(ch===delimiter&&!quote){out.push(cur.trim());cur='';} else cur+=ch;
+  }
+  out.push(cur.trim()); return out;
+}
+function parseStatementCsv(text=''){
+  const lines=String(text).split(/\r?\n/).filter(l=>l.trim()); if(lines.length<2) return [];
+  const first=lines[0]; const delimiter=(first.match(/\t/g)||[]).length>(first.match(/,/g)||[]).length?'\t':((first.match(/;/g)||[]).length>(first.match(/,/g)||[]).length?';':',');
+  const headers=parseDelimitedLine(first,delimiter).map(h=>h.toLowerCase().trim());
+  const find=(patterns)=>headers.findIndex(h=>patterns.some(p=>p.test(h)));
+  const idx={date:find([/date/]),narr:find([/narration/,/description/,/details/,/merchant/]),ref:find([/reference/,/ref\b/]),debit:find([/withdrawal/,/debit/,/\bdr\b/]),credit:find([/deposit/,/credit/,/\bcr\b/]),amount:find([/^amount$/,/transaction amount/]),balance:find([/balance/])};
+  return lines.slice(1).map(line=>{
+    const c=parseDelimitedLine(line,delimiter); const date=parseDateFlexible(c[idx.date]||''); if(!date) return null;
+    const narration=normalizeStatementText(c[idx.narr]||''); const reference=idx.ref>=0?(c[idx.ref]||''):'';
+    const debit=idx.debit>=0?parseMoneyValue(c[idx.debit]):0, credit=idx.credit>=0?parseMoneyValue(c[idx.credit]):0;
+    let amount=debit||credit||(idx.amount>=0?parseMoneyValue(c[idx.amount]):0); if(!amount) return null;
+    const rawAmount=idx.amount>=0?(c[idx.amount]||''):''; const type=statementTypeFor(narration,credit,debit,rawAmount);
+    return {date,narration,reference,debit,credit,amount,type,balance:idx.balance>=0?parseMoneyValue(c[idx.balance]):0,rawAmount};
+  }).filter(Boolean);
+}
+
+function categoryOptions(selected){ return Object.keys(CATEGORIES).map(c=>`<option ${c===selected?'selected':''}>${escapeHtml(c)}</option>`).join(''); }
+function showStatementReview(rows,fileName){
+  const duplicates=rows.filter(r=>r.duplicate).length;
+  modalRoot.innerHTML=`<div class="modal-backdrop" id="statement-backdrop"><div class="modal statement-modal wide" role="dialog" aria-modal="true" aria-label="Statement import review">
+    <div class="modal-head"><div><h3>Review statement import</h3><div class="subtle">${escapeHtml(fileName)} · ${rows.length} transaction${rows.length===1?'':'s'} detected${duplicates?` · ${duplicates} duplicate${duplicates===1?'':'s'} skipped`:''}</div></div><button class="btn icon" id="statement-close" aria-label="Close">×</button></div>
+    <div class="modal-body"><div class="statement-note"><b>Review before saving.</b> Debit purchases become expenses, deposits/refunds become income, and card repayments/settlements are marked as transfers to avoid double-counting.</div>
+      <div class="statement-review-list">${rows.map((r,i)=>`<div class="statement-review-row ${r.duplicate?'is-duplicate':''}" data-statement-row="${i}">
+        <label class="statement-check"><input type="checkbox" data-statement-select="${i}" ${r.selected?'checked':''} ${r.duplicate?'disabled':''}><span></span></label>
+        <div class="statement-main"><div class="statement-title">${escapeHtml(r.merchant||r.narration||'Transaction')}</div><div class="statement-meta">${escapeHtml(r.date)}${r.reference?` · Ref ${escapeHtml(r.reference)}`:''}${r.balance?` · Balance ${money(r.balance)}`:''}${r.duplicate?' · Already imported':''}</div><div class="statement-narration">${escapeHtml(r.narration||'')}</div></div>
+        <div class="statement-controls"><select class="select compact" data-statement-type="${i}"><option value="expense" ${r.type==='expense'?'selected':''}>Expense</option><option value="income" ${r.type==='income'?'selected':''}>Income</option><option value="transfer" ${r.type==='transfer'?'selected':''}>Transfer</option></select><select class="select compact" data-statement-category="${i}" ${r.type!=='expense'?'disabled':''}>${categoryOptions(r.category)}</select></div>
+        <div class="statement-amount ${r.type==='expense'?'negative':r.type==='income'?'positive':''}">${r.type==='income'?'+':'−'}${money(r.amount)}</div>
+      </div>`).join('')}</div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="statement-cancel">Cancel</button><button class="btn primary" id="statement-save">Save selected transactions</button></div>
+  </div></div>`;
+  document.getElementById('statement-close').addEventListener('click',closeStatementImport);
+  document.getElementById('statement-cancel').addEventListener('click',closeStatementImport);
+  document.getElementById('statement-backdrop').addEventListener('click',e=>{if(e.target.id==='statement-backdrop') closeStatementImport();});
+  document.querySelectorAll('[data-statement-select]').forEach(el=>el.addEventListener('change',e=>{pendingStatementRows[Number(e.target.dataset.statementSelect)].selected=e.target.checked;}));
+  document.querySelectorAll('[data-statement-type]').forEach(el=>el.addEventListener('change',e=>{
+    const i=Number(e.target.dataset.statementType), r=pendingStatementRows[i]; r.type=e.target.value;
+    const cat=document.querySelector(`[data-statement-category="${i}"]`); if(cat) cat.disabled=r.type!=='expense';
+  }));
+  document.querySelectorAll('[data-statement-category]').forEach(el=>el.addEventListener('change',e=>{const i=Number(e.target.dataset.statementCategory),r=pendingStatementRows[i];r.category=e.target.value;r.subcategory=CATEGORIES[r.category]?.subs?.[0]||'Other';}));
+  document.getElementById('statement-save').addEventListener('click',saveStatementImport);
+}
+function closeStatementImport(){ pendingStatementRows=[]; pendingStatementFileName=''; modalRoot.innerHTML=''; }
+async function saveStatementImport(){
+  const selected=pendingStatementRows.filter(r=>r.selected&&!r.duplicate); if(!selected.length){ toast('No new statement transactions selected.'); return; }
+  const now=new Date().toISOString();
+  for(const r of selected){
+    const cat=r.type==='expense'?(r.category||'Other'):'';
+    const sub=r.type==='expense'?(r.subcategory||CATEGORIES[cat]?.subs?.[0]||'Other'):'';
+    const noteParts=[`Imported from ${pendingStatementFileName}`];
+    if(r.narration) noteParts.push(r.narration); if(r.reference) noteParts.push(`Ref: ${r.reference}`); noteParts.push(`[Import ID: ${r.importId}]`);
+    state.transactions.push({id:uid(),type:r.type,amount:n(r.amount),merchant:r.merchant||deriveStatementMerchant(r.narration),category:cat,subcategory:sub,date:r.date,payment:'Bank / Card Statement',note:noteParts.join(' · '),createdAt:now,updatedAt:now});
+    if(r.type==='expense'&&r.merchant) state.merchantRules[r.merchant.toLowerCase()]={category:cat,subcategory:sub};
+  }
+  const latest=[...selected].sort((a,b)=>String(b.date).localeCompare(String(a.date)))[0]; if(latest?.date) month=latest.date.slice(0,7);
+  await saveState(); queueCloudSync(); const count=selected.length; closeStatementImport(); view='transactions'; txFilter={search:'',type:'all',category:'all'}; render(); toast(`${count} statement transaction${count===1?'':'s'} saved. Duplicate rows were skipped.`);
 }
 
 function parseReceiptText(text){
@@ -1073,7 +1360,7 @@ async function init(){
   render();
   window.addEventListener('online',()=>{ if(cloudStatus.authenticated) startRealtime(); });
   window.addEventListener('offline',()=>{ realtimeStatus='OFFLINE'; render(); });
-  // v2.4 deliberately runs without a service worker so GitHub Pages updates are immediate.
+  // v2.6 deliberately runs without a service worker so GitHub Pages updates are immediate.
   // Remove only legacy app caches/service workers; keep IndexedDB/localStorage expense data intact.
   try {
     if ('serviceWorker' in navigator) {

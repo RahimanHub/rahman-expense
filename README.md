@@ -1,36 +1,46 @@
-# Rahman Expense v2.5 — Mobile Navy Navigation + Simple Login + Real-Time Sync (KWD)
+# Rahman Expense v2.6 — Statement Import + Real-Time Sync (KWD)
 
-Rahman Expense is a KWD-only personal expense manager for iPhone and laptop. This release keeps the working Supabase email/password sync and improves mobile identity, drill-down navigation, and receipt camera handling.
+Rahman Expense is a KWD-only personal expense manager for iPhone and laptop, developed by Rahiman. v2.6 adds bank and credit-card statement import while preserving the working Supabase real-time sync and mobile/desktop interface.
 
 ## Upgrade on GitHub Pages
-Upload all files in this folder to the `RahimanHub/rahman-expense` GitHub repository and replace the existing files. GitHub Pages remains `main` + `/ (root)`.
+Upload all files in this folder to `RahimanHub/rahman-expense`, replacing the existing files. GitHub Pages stays on `main` + `/ (root)`.
 
-After deployment, check:
-
+Check:
 `https://rahimanhub.github.io/rahman-expense/VERSION.txt`
 
-It should show **v2.5**.
+It should show **v2.6**.
 
 Then open once:
-
 `https://rahimanhub.github.io/rahman-expense/refresh.html`
 
-This clears only legacy app caches and keeps local expense data intact.
+## v2.6 statement import
+Open **Transactions → Import statement** or **Settings → Import statement**.
 
-## v2.5 improvements
-- Mobile now shows **Rahman Expense**, **KWD only**, the app version, and **Developed by Rahiman**.
-- Desktop sidebar and Settings also show **Developed by Rahiman**.
-- Dashboard **Income** opens Income transactions.
-- Dashboard **Expenses** opens Expense transactions.
-- Dashboard **Budget left** opens Monthly Budget.
-- Report metric cards drill down to the matching Transactions or Budget page.
-- Budget **Actual spending** opens expense transactions.
-- Mobile **Scan receipt** attempts to open the rear-camera picker directly.
-- Receipt editor has explicit **Take photo** and **Choose image** buttons for better iPhone compatibility.
-- Receipt images remain temporary and are not stored in cloud sync.
+Supported input:
+- Text-based PDF bank statements
+- Scanned PDF statements (local OCR fallback, first 8 scanned pages)
+- CSV exports
+- Statement screenshots/images
 
-## Supabase sync
-Use the same Supabase Project URL, publishable key, email, and password on iPhone and laptop. When connected, Settings should show **Connected · Live** and **Live: On**.
+Rahman Expense:
+1. Reads the file locally in the browser.
+2. Detects transaction rows one-by-one.
+3. Treats debit purchases as expenses.
+4. Treats deposits/refunds as income when detected.
+5. Treats credit-card repayments, minimum-due settlements, WAMD/outward transfers and similar rows as **transfers** so purchases are not double-counted.
+6. Suggests expense categories using merchant rules and keywords.
+7. Shows a review screen before saving.
+8. Flags likely duplicates using date, type, amount, merchant/reference and an import fingerprint.
+9. Saves selected rows as individual Rahman Expense transactions and syncs them through Supabase.
 
-## Security
-Never put a Supabase secret or `service_role` key in the browser app. Use only the publishable/anon key with Row Level Security enabled.
+## Credit-card statements
+A credit-card statement can be imported the same way. Purchases are added as individual expenses. Payment/settlement rows are marked as transfers by default. Always review detected rows before saving because bank layouts vary.
+
+## PDF invoice / receipt
+The receipt scanner now also accepts a single PDF invoice. It extracts PDF text locally, then fills amount, merchant, date and category for confirmation.
+
+## Privacy
+Statement and receipt files are temporary and are not uploaded to Rahman Expense cloud storage. Confirmed transaction data only is synchronized to Supabase. PDF.js/Tesseract libraries are loaded in the browser from jsDelivr.
+
+## Supabase
+No database schema change is required from v2.5 for statement import. Continue using the same Supabase Project URL, publishable key, email and password. Never use a secret/service_role key in the browser app.
