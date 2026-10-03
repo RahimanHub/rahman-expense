@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.0';
+const APP_VERSION = '2.1';
 const APP_CURRENCY = 'KWD';
 const CURRENCY_DECIMALS = 3;
 const DB_NAME = 'rahman-expense-v2-db';
@@ -268,17 +268,45 @@ async function saveCloudSetup(){
   saveCloudConfig({url,anonKey,email});
   await refreshCloudSession(); render(); toast('Cloud setup saved on this device.');
 }
-async function sendCloudLogin(){
-  if(location.protocol==='file:'){ toast('Open Rahman Expense from its HTTPS website before cloud sign-in.'); return; }
+function getCloudCredentials(){
   const email=document.getElementById('cloud-email')?.value.trim()||getCloudConfig().email;
-  if(!email||!email.includes('@')){ toast('Enter your email address first.'); return; }
+  const password=document.getElementById('cloud-password')?.value||'';
+  if(!email||!email.includes('@')) throw new Error('Enter a valid email address.');
+  if(password.length<8) throw new Error('Password must be at least 8 characters.');
   const cfg=getCloudConfig(); saveCloudConfig({...cfg,email});
+  return {email,password};
+}
+async function cloudCreateAccount(){
+  if(location.protocol==='file:'){ toast('Open Rahman Expense from its HTTPS website before cloud sign-in.'); return; }
   try{
+    const {email,password}=getCloudCredentials();
     const client=await getCloudClient();
-    const redirect=`${location.origin}${location.pathname}`;
-    const {error}=await client.auth.signInWithOtp({email,options:{emailRedirectTo:redirect}}); if(error) throw error;
-    toast('Sign-in link sent. Open the email on this device.');
-  }catch(err){ toast(`Could not send sign-in link: ${err?.message||'unknown error'}`); }
+    const {data,error}=await client.auth.signUp({email,password});
+    if(error) throw error;
+    await refreshCloudSession();
+    if(data?.session){
+      await startRealtime();
+      await syncCloud(true);
+      toast('Account created and signed in. Live sync is starting.');
+    }else{
+      toast('Account created, but Supabase is waiting for email confirmation. Turn off Confirm email in Supabase Authentication settings for the simple-login setup.');
+    }
+    render();
+  }catch(err){ toast(`Could not create account: ${err?.message||'unknown error'}`); }
+}
+async function cloudPasswordLogin(){
+  if(location.protocol==='file:'){ toast('Open Rahman Expense from its HTTPS website before cloud sign-in.'); return; }
+  try{
+    const {email,password}=getCloudCredentials();
+    const client=await getCloudClient();
+    const {error}=await client.auth.signInWithPassword({email,password});
+    if(error) throw error;
+    await refreshCloudSession();
+    await startRealtime();
+    await syncCloud(true);
+    render();
+    toast('Signed in. Live sync is on.');
+  }catch(err){ toast(`Could not sign in: ${err?.message||'unknown error'}`); }
 }
 async function cloudSignOut(){
   await stopRealtime();
@@ -491,7 +519,7 @@ async function loadState(){
   if(saved && Array.isArray(saved.transactions)) {
     state={...defaultState(),...saved,settings:{...defaultState().settings,...saved.settings,currency:APP_CURRENCY}};
   } else {
-    // v2.0 intentionally starts with a clean Rahman Expense storage namespace.
+    // v2.0+ intentionally uses the clean Rahman Expense storage namespace.
     // Older Ledgerly/Rahman Expense browser data is left untouched and is NOT auto-imported.
     state=defaultState();
     await saveState();
@@ -708,11 +736,12 @@ function settingsView(){
       <div class="sync-form">
         <div class="field"><label>Supabase Project URL</label><input class="input" id="cloud-url" value="${escapeHtml(cfg.url)}" placeholder="https://xxxx.supabase.co" /></div>
         <div class="field"><label>Publishable / anon public key</label><input class="input" id="cloud-key" type="password" value="${escapeHtml(cfg.anonKey)}" placeholder="Publishable key only — never secret/service_role" /></div>
-        <div class="field"><label>Your login email</label><input class="input" id="cloud-email" type="email" value="${escapeHtml(cloudStatus.email||cfg.email)}" placeholder="you@example.com" /></div>
+        <div class="field"><label>Your login email</label><input class="input" id="cloud-email" type="email" value="${escapeHtml(cloudStatus.email||cfg.email)}" placeholder="you@example.com" autocomplete="username" /></div>
+        ${cloudStatus.authenticated?'':`<div class="field"><label>Password</label><input class="input" id="cloud-password" type="password" placeholder="At least 8 characters" autocomplete="current-password" /><div class="subtle" style="margin-top:6px">Password is used only to sign in and is not saved in Rahman Expense.</div></div>`}
       </div>
       <div class="actions" style="margin-top:14px">
         <button class="btn" data-action="cloud-save">Save cloud setup</button>
-        ${cloudStatus.authenticated?`<button class="btn primary" data-action="cloud-sync">Sync now</button><button class="btn soft" data-action="cloud-signout">Sign out</button>`:`<button class="btn primary" data-action="cloud-login">Email me a sign-in link</button>`}
+        ${cloudStatus.authenticated?`<button class="btn primary" data-action="cloud-sync">Sync now</button><button class="btn soft" data-action="cloud-signout">Sign out</button>`:`<button class="btn primary" data-action="cloud-password-login">Sign in</button><button class="btn soft" data-action="cloud-create-account">Create account</button>`}
       </div>
       <div class="sync-meta"><span><b>Account:</b> ${escapeHtml(cloudStatus.email||'Not signed in')}</span><span><b>Last sync:</b> ${escapeHtml(lastSync)}</span><span><b>Live:</b> ${escapeHtml(realtimeStatus==='SUBSCRIBED'?'On':realtimeStatus==='CONNECTING'?'Connecting…':'Off')}</span>${cloudStatus.error?`<span class="negative"><b>Status:</b> ${escapeHtml(cloudStatus.error)}</span>`:''}</div>
       <div class="privacy-note"><b>Privacy:</b> the Supabase <i>publishable key</i> (or legacy anon key) is appropriate for a browser app when Row Level Security is enabled. Never paste a Supabase <i>secret/service_role</i> key into Rahman Expense.</div>
@@ -748,7 +777,8 @@ function bindView(){
   document.querySelectorAll('[data-action="backup-export"]').forEach(el=>el.addEventListener('click',exportBackup));
   document.querySelectorAll('[data-action="backup-share"]').forEach(el=>el.addEventListener('click',shareBackup));
   document.querySelectorAll('[data-action="cloud-save"]').forEach(el=>el.addEventListener('click',saveCloudSetup));
-  document.querySelectorAll('[data-action="cloud-login"]').forEach(el=>el.addEventListener('click',sendCloudLogin));
+  document.querySelectorAll('[data-action="cloud-password-login"]').forEach(el=>el.addEventListener('click',cloudPasswordLogin));
+  document.querySelectorAll('[data-action="cloud-create-account"]').forEach(el=>el.addEventListener('click',cloudCreateAccount));
   document.querySelectorAll('[data-action="cloud-sync"]').forEach(el=>el.addEventListener('click',()=>syncCloud(false)));
   document.querySelectorAll('[data-action="cloud-signout"]').forEach(el=>el.addEventListener('click',cloudSignOut));
 

@@ -1,12 +1,12 @@
-const CACHE = 'rahman-expense-v2.0';
+const CACHE = 'rahman-expense-v2.1';
 const CORE = [
   './',
   './index.html',
-  './styles.css?v=2.0',
-  './app.js?v=2.0',
-  './cloud-config.js?v=2.0',
-  './manifest.webmanifest?v=2.0',
-  './icon.svg?v=2.0'
+  './styles.css?v=2.1',
+  './app.js?v=2.1',
+  './cloud-config.js?v=2.1',
+  './manifest.webmanifest?v=2.1',
+  './icon.svg?v=2.1'
 ];
 
 self.addEventListener('install', event => {

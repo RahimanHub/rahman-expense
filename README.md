@@ -1,27 +1,37 @@
-# Rahman Expense v2.0 — Fresh Storage + Real-Time Sync (KWD)
+# Rahman Expense v2.1 — Simple Password Login + Real-Time Sync (KWD)
 
-This build fixes the issue where a newly deployed version could still load old browser data.
+This release removes the Supabase magic-link dependency from Rahman Expense. It uses normal **email + password** sign-in, so there is no localhost redirect and no authentication link to open from email.
 
-## Important change
+## Upgrade
+Upload all files in this folder to the `RahimanHub/rahman-expense` GitHub repository and replace the existing v2.0 files. GitHub Pages remains `main` + `/ (root)`.
 
-Rahman Expense v2.0 uses a **new IndexedDB database name and new state key**. It does **not** automatically import older Ledgerly/Rahman Expense browser storage. This means the app starts clean on each device after v2.0 is deployed. Older browser data is left untouched in the browser and is not deleted.
+Open:
 
-Cloud sync remains optional. Once Supabase is configured and the same account is used on iPhone and laptop, both devices can share the same cloud data.
+`https://rahimanhub.github.io/rahman-expense/?v=2.1`
 
-## Update GitHub
+The sidebar should show **KWD only · v2.1**.
 
-Upload the contents of this folder to the root of the `rahman-expense` repository and replace the existing files. Keep GitHub Pages configured as **main → / (root)**.
+## Supabase one-time setup
+1. Keep the existing `supabase_schema.sql` already run in the project.
+2. In Supabase, open **Authentication → Providers → Email** (wording may vary).
+3. Keep Email authentication enabled.
+4. Turn **Confirm email** / **Email confirmations** OFF for this personal app. With confirmation disabled, Supabase returns a session immediately after signup instead of sending a confirmation link.
+5. If the same email was already created by the old magic-link tests and has no password, delete that test user once from **Authentication → Users** before creating the account in Rahman Expense.
 
-After GitHub Pages finishes deploying, open:
+## Rahman Expense settings
+Enter:
+- Supabase Project URL
+- Publishable key (`sb_publishable_...`)
+- Your email
+- A strong password (8+ characters)
 
-`https://rahimanhub.github.io/rahman-expense/?v=2.0`
+Click **Save cloud setup**.
 
-The sidebar should show **KWD only · v2.0** and the app should start with fresh local data.
+On the first device click **Create account** once. On the second device click **Sign in** using the same email and password.
 
-## Privacy
+The password is never saved in Rahman Expense. Supabase stores the authenticated session in the browser so you normally stay signed in.
 
-- Old local browser data is not deleted; v2.0 simply does not read it.
-- GitHub Pages hosts only the app files.
-- Financial records stay local unless Supabase sync is enabled.
-- Receipt photos remain temporary and are not synchronized.
-- Never put a Supabase service-role key in GitHub or in the browser app.
+When connected, Settings should show **Connected · Live** and **Live: On**.
+
+## Security
+Never put a Supabase secret or `service_role` key in this browser app. Only use the publishable/anon key with Row Level Security enabled.
