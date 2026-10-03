@@ -1,12 +1,12 @@
 'use strict';
 
-const APP_VERSION = '1.9';
+const APP_VERSION = '2.0';
 const APP_CURRENCY = 'KWD';
 const CURRENCY_DECIMALS = 3;
-const DB_NAME = 'ledgerly-pro-db';
+const DB_NAME = 'rahman-expense-v2-db';
 const DB_STORE = 'kv';
-const STATE_KEY = 'ledgerly_state';
-const CLOUD_CONFIG_KEY = 'ledgerly_cloud_config';
+const STATE_KEY = 'rahman_expense_state_v2';
+const CLOUD_CONFIG_KEY = 'rahman_expense_cloud_config_v2';
 
 const CATEGORIES = {
   Housing: { icon: '🏠', subs: ['Rent', 'Maintenance', 'Furniture', 'Other'] },
@@ -490,13 +490,11 @@ async function loadState(){
   const saved=await dbGet(STATE_KEY);
   if(saved && Array.isArray(saved.transactions)) {
     state={...defaultState(),...saved,settings:{...defaultState().settings,...saved.settings,currency:APP_CURRENCY}};
-  }
-  else {
-    try{
-      const legacy=JSON.parse(localStorage.getItem('ledgerly')||'null');
-      const migrated=migrateLegacy(legacy);
-      if(migrated){ state=migrated; await saveState(); }
-    }catch(e){}
+  } else {
+    // v2.0 intentionally starts with a clean Rahman Expense storage namespace.
+    // Older Ledgerly/Rahman Expense browser data is left untouched and is NOT auto-imported.
+    state=defaultState();
+    await saveState();
   }
   normalizeState();
 }
