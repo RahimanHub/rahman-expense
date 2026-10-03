@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.8';
+const APP_VERSION = '2.9';
 const COUNTRIES = {
   KW: { name: 'Kuwait', flag: '🇰🇼', currency: 'KWD', decimals: 3 },
   IN: { name: 'India', flag: '🇮🇳', currency: 'INR', decimals: 2 }
@@ -12,9 +12,11 @@ const CLOUD_CONFIG_KEY = 'rahman_expense_cloud_config_v2';
 
 // The same category structure is used for Kuwait and India.
 // Shopping is intentionally split so personal purchases and home purchases never mix.
+// Groceries is a dedicated top-level category for supermarket and household food purchases.
 const CATEGORIES = {
   Housing: { icon: '🏠', subs: ['Rent', 'Maintenance', 'Furniture', 'Other'] },
-  Food: { icon: '🍽️', subs: ['Groceries', 'Restaurant', 'Delivery', 'Coffee', 'Other'] },
+  Groceries: { icon: '🛒', subs: ['Supermarket', 'Vegetables & Fruits', 'Meat & Fish', 'Household Food', 'General', 'Other'] },
+  Food: { icon: '🍽️', subs: ['Restaurant', 'Delivery', 'Coffee', 'Snacks', 'Other'] },
   Transport: { icon: '🚕', subs: ['Fuel', 'Taxi', 'Public Transport', 'Parking', 'Other'] },
   Vehicle: { icon: '🚗', subs: ['Maintenance', 'Insurance', 'Registration', 'Other'] },
   'Personal Shopping': { icon: '🛍️', subs: ['Clothing', 'Electronics', 'Accessories', 'Personal Items', 'General', 'Other'] },
@@ -37,7 +39,7 @@ const CATEGORIES = {
 const PALETTE = ['#24685d','#c16b44','#667ac4','#b38b34','#865b9e','#4b8b88','#bf5f68','#728151','#4c6d91','#9b6d55','#7c6f9c','#5d8b63','#a0657b','#7a7f46','#4e8096','#9c6b3e','#6d738f','#7e6c5e'];
 
 const MERCHANT_HINTS = [
-  [/lulu|carrefour|sultan|hypermarket|supermarket|coop|co-op|grocery|reliance fresh|dmart|more supermarket/i, ['Food','Groceries']],
+  [/lulu|carrefour|sultan|hypermarket|supermarket|coop|co-op|grocery|groceries|reliance fresh|dmart|more supermarket|nesto|grand hyper|on cost/i, ['Groceries','Supermarket']],
   [/kfc|mcdonald|burger|restaurant|cafe|coffee|starbucks|pizza|talabat|deliveroo|swiggy|zomato/i, ['Food','Restaurant']],
   [/ooredoo|zain|stc|jio|airtel|vi |vodafone|mobile|telecom/i, ['Mobile','Plan']],
   [/knpc|fuel|petrol|gas station|shell|indian oil|bharat petroleum|hpcl/i, ['Transport','Fuel']],
@@ -136,7 +138,14 @@ async function getCloudClient(){
 function normalizeCategoryName(cat='', sub=''){
   if(cat==='Shopping') return sub==='Home'?'Home Shopping':'Personal Shopping';
   if(cat==='Clothes') return 'Personal Shopping';
+  if(cat==='Food' && sub==='Groceries') return 'Groceries';
   return CATEGORIES[cat]?cat:'Other';
+}
+function normalizeSubcategoryName(cat='', sub=''){
+  const nc=normalizeCategoryName(cat,sub);
+  if(nc==='Groceries' && (cat==='Food' || sub==='Groceries')) return 'General';
+  const allowed=CATEGORIES[nc]?.subs||[];
+  return allowed.includes(sub)?sub:(allowed.includes('General')?'General':allowed.includes('Other')?'Other':allowed[0]||'');
 }
 function countryMeta(c=country){ return COUNTRIES[c]||COUNTRIES.KW; }
 function merchantRuleKey(merchant='',c=country){ return `${c}|${String(merchant).trim().toLowerCase()}`; }
@@ -161,7 +170,7 @@ function normalizeState(){
     id:validUuid(t.id)?t.id:uid(),
     country:COUNTRIES[t.country]?t.country:'KW',
     category:t.type==='expense'?normalizeCategoryName(t.category,t.subcategory):'',
-    subcategory:t.type==='expense'?(t.category==='Shopping'&&t.subcategory==='Home'?'General':t.subcategory||'Other'):'',
+    subcategory:t.type==='expense'?normalizeSubcategoryName(t.category,t.subcategory):'',
     createdAt:t.createdAt||new Date().toISOString(),
     updatedAt:t.updatedAt||t.createdAt||new Date().toISOString()
   }));
@@ -181,7 +190,7 @@ function normalizeState(){
   const nextRules={};
   for(const [key,val] of Object.entries(state.merchantRules||{})){
     const pref=/^(KW|IN)\|/.test(key)?key:`KW|${key}`;
-    nextRules[pref]={category:normalizeCategoryName(val?.category,val?.subcategory),subcategory:val?.subcategory||'Other'};
+    nextRules[pref]={category:normalizeCategoryName(val?.category,val?.subcategory),subcategory:normalizeSubcategoryName(val?.category,val?.subcategory)};
   }
   state.merchantRules=nextRules;
 
@@ -206,7 +215,7 @@ function budgetKey(m,cat,c=country){ return `${c}|${m}|${cat}`; }
 function splitBudgetKey(key){ const p=String(key).split('|'); return p.length>=3?[p[0],p[1],p.slice(2).join('|')]:['KW',p[0]||'',p.slice(1).join('|')]; }
 function remoteTxToLocal(r){
   const rc=COUNTRIES[r.country]?r.country:'KW';
-  return {id:r.id,country:rc,type:r.type,amount:n(r.amount),merchant:r.merchant||'',category:r.type==='expense'?normalizeCategoryName(r.category,r.subcategory):'',subcategory:r.subcategory||'',date:r.txn_date,payment:r.payment_method||'',note:r.note||'',createdAt:r.created_at,updatedAt:r.updated_at};
+  return {id:r.id,country:rc,type:r.type,amount:n(r.amount),merchant:r.merchant||'',category:r.type==='expense'?normalizeCategoryName(r.category,r.subcategory):'',subcategory:r.type==='expense'?normalizeSubcategoryName(r.category,r.subcategory):'',date:r.txn_date,payment:r.payment_method||'',note:r.note||'',createdAt:r.created_at,updatedAt:r.updated_at};
 }
 function localTxToRemote(t,userId){
   return {id:t.id,user_id:userId,country:COUNTRIES[t.country]?t.country:'KW',type:t.type,amount:n(t.amount),merchant:t.merchant||null,category:t.category||null,subcategory:t.subcategory||null,txn_date:t.date,payment_method:t.payment||null,note:t.note||null,receipt_retained:false,created_at:t.createdAt||new Date().toISOString(),updated_at:t.updatedAt||new Date().toISOString()};
@@ -964,7 +973,7 @@ function quickScanReceipt(){
 function openTransactionModal(id=null,scan=false){
   modalTxId=id;
   const existing=id?state.transactions.find(t=>t.id===id):null;
-  const t=existing?{...existing}:{country,type:'expense',amount:'',merchant:'',category:'Food',subcategory:'Groceries',date:today(),payment:'',note:''};
+  const t=existing?{...existing}:{country,type:'expense',amount:'',merchant:'',category:'Groceries',subcategory:'General',date:today(),payment:'',note:''};
   const modalCountry=COUNTRIES[t.country]?t.country:country; const modalMeta=countryMeta(modalCountry);
   modalRoot.innerHTML=`<div class="modal-backdrop" id="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="Transaction editor">
     <div class="modal-head"><div><h3>${existing?'Edit transaction':scan?'Scan receipt':'Add transaction'}</h3><div class="subtle">${modalMeta.flag} ${modalMeta.name} · ${modalMeta.currency} · ${scan?'Photo is used temporarily and not stored.':'Keep every entry clean and report-ready.'}</div></div><button class="btn icon" id="modal-close" aria-label="Close">×</button></div>
