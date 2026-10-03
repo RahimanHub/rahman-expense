@@ -1,4 +1,4 @@
-# Rahman Expense v2.4 — Mobile Professional + Simple Login + Real-Time Sync (KWD)
+# Rahman Expense v2.5 — Mobile Navy Navigation + Simple Login + Real-Time Sync (KWD)
 
 Rahman Expense is a KWD-only personal expense manager for iPhone and laptop. This release keeps the working Supabase email/password sync and improves mobile identity, drill-down navigation, and receipt camera handling.
 
@@ -9,7 +9,7 @@ After deployment, check:
 
 `https://rahimanhub.github.io/rahman-expense/VERSION.txt`
 
-It should show **v2.4**.
+It should show **v2.5**.
 
 Then open once:
 
@@ -17,7 +17,7 @@ Then open once:
 
 This clears only legacy app caches and keeps local expense data intact.
 
-## v2.4 improvements
+## v2.5 improvements
 - Mobile now shows **Rahman Expense**, **KWD only**, the app version, and **Developed by Rahiman**.
 - Desktop sidebar and Settings also show **Developed by Rahiman**.
 - Dashboard **Income** opens Income transactions.

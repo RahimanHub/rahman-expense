@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.4';
+const APP_VERSION = '2.5';
 const APP_CURRENCY = 'KWD';
 const CURRENCY_DECIMALS = 3;
 const DB_NAME = 'rahman-expense-v2-db';
