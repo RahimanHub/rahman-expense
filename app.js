@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.13';
+const APP_VERSION = '2.14';
 const COUNTRIES = {
   KW: { name: 'Kuwait', flag: '🇰🇼', currency: 'KWD', decimals: 3 },
   IN: { name: 'India', flag: '🇮🇳', currency: 'INR', decimals: 2 }
@@ -762,15 +762,13 @@ function dashboardView(){
   const remaining=budget-spent;
   const savings=income-spent-transfers;
   const used=budget?spent/budget*100:0;
-  const allCountryTx=countryTransactions();
-  const allIncome=sumType(allCountryTx,'income');
-  const allExpense=sumType(allCountryTx,'expense');
-  const allTransfer=sumType(allCountryTx,'transfer');
-  const available=openingBalance()+allIncome-allExpense-allTransfer;
+  const acct=accountSummary();
+  // Available balance is the money actually available after current credit-card dues:
+  // cash in hand + bank/debit balances - credit-card outstanding.
+  const available=acct.netAfterCredit;
   const catRows=Object.keys(CATEGORIES).map((cat,idx)=>({cat,idx,spent:categorySpend(tx,cat),budget:budgetFor(cat)})).filter(x=>x.spent>0||x.budget>0).sort((a,b)=>b.spent-a.spent);
   const latest=[...tx].sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.createdAt||'').localeCompare(String(a.createdAt||''))).slice(0,6);
   const budgetClass=used>=100?'over':used>=90?'warning':'';
-  const acct=accountSummary();
 
   const content=`
     <div class="dashboard-month"><div>${monthSwitchHtml()}</div><div class="status-pill ${budget&&used<90?'good':used>=100?'over':used>=90?'warn':''}">${budget?`${Math.round(used)}% budget used`:'Budget not set'}</div></div>
@@ -779,7 +777,7 @@ function dashboardView(){
       <div class="overview-main">
         <div class="eyebrow">AVAILABLE BALANCE</div>
         <div class="overview-value">${money(available)}</div>
-        <div class="overview-note">${monthLabel(month)} · ${savings>=0?`${money(savings)} saved so far`:`${money(Math.abs(savings))} above monthly income`}</div>
+        <div class="overview-note">Cash ${money(acct.cashBalance)} + bank ${money(acct.bankBalance)} − card due ${money(acct.creditUsed)}</div>
       </div>
       <div class="overview-side">
         <div class="overview-progress-head"><span>Monthly budget</span><strong>${budget?`${Math.round(used)}%`:'—'}</strong></div>

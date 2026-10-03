@@ -1,1 +1,1 @@
-Rahman Expense v2.13 — Quick Update Cash in Hand + Cash at Bank + Credit Limit — Kuwait KWD + India INR
+Rahman Expense v2.14 — Available Balance = Cash in Hand + Cash at Bank - Credit Card Due — Kuwait KWD + India INR
