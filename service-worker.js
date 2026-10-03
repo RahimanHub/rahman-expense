@@ -1,4 +1,4 @@
-// Rahman Expense v2.4 legacy service-worker cleanup.
+// Rahman Expense v2.8 legacy service-worker cleanup.
 self.addEventListener('install', event => { self.skipWaiting(); });
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {

@@ -1,1 +1,1 @@
-Rahman Expense v2.6 — Statement Import + PDF/CSV/Image + Real-Time Sync KWD — GitHub Pages Ready
+Rahman Expense v2.8 — Kuwait + India Separate Expenses — KWD / INR — Real-Time Sync

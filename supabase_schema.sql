@@ -1,5 +1,6 @@
--- Ledgerly Pro cloud schema (Supabase/PostgreSQL)
--- Run in Supabase SQL Editor when deploying the synchronized version.
+-- Rahman Expense v2.8 cloud schema / migration
+-- Kuwait (KWD) and India (INR) are stored separately under one private account.
+-- Safe to run again in Supabase SQL Editor after earlier Rahman Expense versions.
 
 create extension if not exists pgcrypto;
 
@@ -11,10 +12,12 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.profiles add column if not exists opening_balance_inr numeric(14,2) not null default 0;
 
 create table if not exists public.transactions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  country text not null default 'KW',
   type text not null check (type in ('expense','income','transfer')),
   amount numeric(14,3) not null check (amount > 0),
   merchant text,
@@ -27,31 +30,55 @@ create table if not exists public.transactions (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index if not exists transactions_user_date_idx on public.transactions(user_id, txn_date desc);
-create index if not exists transactions_user_category_idx on public.transactions(user_id, category, txn_date desc);
+alter table public.transactions add column if not exists country text not null default 'KW';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname='transactions_country_check' and conrelid='public.transactions'::regclass) then
+    alter table public.transactions add constraint transactions_country_check check (country in ('KW','IN'));
+  end if;
+end $$;
+create index if not exists transactions_user_country_date_idx on public.transactions(user_id, country, txn_date desc);
+create index if not exists transactions_user_country_category_idx on public.transactions(user_id, country, category, txn_date desc);
 
 create table if not exists public.monthly_budgets (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  country text not null default 'KW',
   budget_month date not null,
   category text not null,
   planned_amount numeric(14,3) not null default 0 check (planned_amount >= 0),
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique(user_id, budget_month, category)
+  updated_at timestamptz not null default now()
 );
-create index if not exists monthly_budgets_user_month_idx on public.monthly_budgets(user_id, budget_month);
+alter table public.monthly_budgets add column if not exists country text not null default 'KW';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname='monthly_budgets_country_check' and conrelid='public.monthly_budgets'::regclass) then
+    alter table public.monthly_budgets add constraint monthly_budgets_country_check check (country in ('KW','IN'));
+  end if;
+end $$;
+alter table public.monthly_budgets drop constraint if exists monthly_budgets_user_id_budget_month_category_key;
+drop index if exists public.monthly_budgets_user_id_budget_month_category_key;
+create unique index if not exists monthly_budgets_user_country_month_category_uidx on public.monthly_budgets(user_id,country,budget_month,category);
+create index if not exists monthly_budgets_user_country_month_idx on public.monthly_budgets(user_id,country,budget_month);
 
 create table if not exists public.merchant_rules (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  country text not null default 'KW',
   merchant_key text not null,
   category text not null,
   subcategory text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique(user_id, merchant_key)
+  updated_at timestamptz not null default now()
 );
+alter table public.merchant_rules add column if not exists country text not null default 'KW';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname='merchant_rules_country_check' and conrelid='public.merchant_rules'::regclass) then
+    alter table public.merchant_rules add constraint merchant_rules_country_check check (country in ('KW','IN'));
+  end if;
+end $$;
+alter table public.merchant_rules drop constraint if exists merchant_rules_user_id_merchant_key_key;
+drop index if exists public.merchant_rules_user_id_merchant_key_key;
+create unique index if not exists merchant_rules_user_country_merchant_uidx on public.merchant_rules(user_id,country,merchant_key);
 
 alter table public.profiles enable row level security;
 alter table public.transactions enable row level security;
@@ -67,7 +94,6 @@ create policy "budgets are private" on public.monthly_budgets for all using (aut
 drop policy if exists "merchant rules are private" on public.merchant_rules;
 create policy "merchant rules are private" on public.merchant_rules for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- Keep updated_at current for two-way device synchronization.
 create or replace function public.ledgerly_set_updated_at()
 returns trigger
 language plpgsql
@@ -87,13 +113,6 @@ create trigger monthly_budgets_set_updated_at before update on public.monthly_bu
 drop trigger if exists merchant_rules_set_updated_at on public.merchant_rules;
 create trigger merchant_rules_set_updated_at before update on public.merchant_rules for each row execute function public.ledgerly_set_updated_at();
 
--- v1.9 REAL-TIME SYNC -------------------------------------------------------
--- Postgres Changes is disabled for new Supabase projects until tables are
--- added to the supabase_realtime publication. The app subscribes only to the
--- signed-in user's rows; RLS remains the primary data-access boundary.
-
--- Explicit browser privileges: signed-out visitors get no financial-table
--- access; authenticated users may operate only on rows allowed by RLS.
 revoke all on table public.profiles from anon;
 revoke all on table public.transactions from anon;
 revoke all on table public.monthly_budgets from anon;
@@ -104,20 +123,16 @@ grant select, insert, update, delete on table public.transactions to authenticat
 grant select, insert, update, delete on table public.monthly_budgets to authenticated;
 grant select, insert, update, delete on table public.merchant_rules to authenticated;
 
--- Required so filtered DELETE events can be matched by Realtime. With RLS,
--- clients still receive only the primary key in payload.old for deletes.
 alter table public.transactions replica identity full;
 alter table public.monthly_budgets replica identity full;
 alter table public.merchant_rules replica identity full;
 alter table public.profiles replica identity full;
 
--- Idempotently enable Postgres Changes for Rahman Expense tables.
 do $$
 begin
   if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     execute 'create publication supabase_realtime';
   end if;
-
   if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='transactions') then
     execute 'alter publication supabase_realtime add table public.transactions';
   end if;
@@ -131,3 +146,6 @@ begin
     execute 'alter publication supabase_realtime add table public.profiles';
   end if;
 end $$;
+
+-- Existing v2.7 and earlier cloud rows automatically remain Kuwait rows because
+-- the new country columns default to 'KW'. India starts completely separate.

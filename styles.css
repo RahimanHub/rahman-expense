@@ -512,3 +512,25 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
  .statement-review-row{padding:10px}
  .statement-amount{font-size:13px}
 }
+
+.statement-direction{display:inline-flex;align-items:center;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:850;letter-spacing:.02em}.statement-direction.is-debit{background:#fff0f0;color:#b83e48}.statement-direction.is-credit{background:#eaf9f2;color:#16845f}.statement-amount small{display:block;font-size:9px;line-height:1;color:var(--muted);margin-bottom:3px}
+
+/* v2.8 Kuwait / India country separation */
+.country-tabs-wrap { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; }
+.country-tabs { display:inline-grid; grid-template-columns:repeat(2,minmax(138px,1fr)); gap:6px; padding:5px; border:1px solid var(--border); border-radius:14px; background:#fff; box-shadow:var(--shadow); }
+.country-tab { min-width:0; min-height:48px; border:0; border-radius:10px; background:transparent; color:#6e7d94; display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:7px; padding:8px 11px; text-align:left; }
+.country-tab > span { font-size:20px; line-height:1; }
+.country-tab > b { color:inherit; font-size:13px; }
+.country-tab > small { color:#9aa7ba; font-size:9px; font-weight:800; letter-spacing:.04em; }
+.country-tab.active { background:linear-gradient(135deg,#315fe8 0%,#5278f4 100%); color:#fff; box-shadow:0 6px 16px rgba(49,95,232,.22); }
+.country-tab.active small { color:#dce5ff; }
+.country-context { color:var(--muted); font-size:12px; white-space:nowrap; }
+.country-context b { color:var(--text); }
+
+@media (max-width:720px){
+  .country-tabs-wrap { align-items:stretch; flex-direction:column; gap:7px; margin-bottom:14px; }
+  .country-tabs { width:100%; grid-template-columns:1fr 1fr; }
+  .country-tab { grid-template-columns:auto 1fr; min-height:46px; padding:7px 10px; }
+  .country-tab > small { grid-column:2; margin-top:-4px; }
+  .country-context { padding-left:3px; font-size:10px; }
+}

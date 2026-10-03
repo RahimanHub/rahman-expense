@@ -5,7 +5,7 @@
   "display": "standalone",
   "background_color": "#f4f7fb",
   "theme_color": "#162947",
-  "description": "Rahman Expense — private KWD expense tracking, monthly budgets, receipt scanning and reports. Developed by Rahiman.",
+  "description": "Rahman Expense — separate Kuwait KWD and India INR expense tracking, monthly budgets, receipt scanning and reports. Developed by Rahiman.",
   "icons": [
     {"src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
   ]

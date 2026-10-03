@@ -1,46 +1,37 @@
-# Rahman Expense v2.6 — Statement Import + Real-Time Sync (KWD)
+# Rahman Expense v2.8 — Kuwait + India Separate Expenses
 
-Rahman Expense is a KWD-only personal expense manager for iPhone and laptop, developed by Rahiman. v2.6 adds bank and credit-card statement import while preserving the working Supabase real-time sync and mobile/desktop interface.
+Developed by Rahiman.
+
+## What changed
+- Two permanent country tabs: **Kuwait** and **India**.
+- Kuwait uses **KWD with 3 decimals**.
+- India uses **INR with 2 decimals**.
+- Transactions, available balance, monthly budgets, reports, category totals, statement imports and merchant learning remain **separate for each country**.
+- Existing v2.7 and earlier data is migrated to **Kuwait** automatically.
+- Shopping is split into **Personal Shopping** and **Home Shopping**.
+- The shared category set includes **Utilities → Electricity / Water / Gas** for both countries.
+- India payment methods include UPI, Debit Card, Credit Card, Cash, Bank Transfer and Net Banking.
+- Statement/PDF/CSV import saves into whichever country tab is active.
+- Receipt scanning saves into whichever country tab is active.
+
+## IMPORTANT — run the Supabase migration once
+Because v2.8 stores Kuwait and India separately in the cloud, open Supabase → SQL Editor and run the **new `supabase_schema.sql` from v2.8** once after deploying this version.
+
+The migration:
+- keeps all existing cloud transactions as Kuwait (`KW`),
+- adds India (`IN`) support,
+- separates monthly budgets by country,
+- separates merchant/category learning by country,
+- adds a separate India opening balance,
+- preserves RLS and real-time synchronization.
 
 ## Upgrade on GitHub Pages
-Upload all files in this folder to `RahimanHub/rahman-expense`, replacing the existing files. GitHub Pages stays on `main` + `/ (root)`.
-
-Check:
-`https://rahimanhub.github.io/rahman-expense/VERSION.txt`
-
-It should show **v2.6**.
-
-Then open once:
-`https://rahimanhub.github.io/rahman-expense/refresh.html`
-
-## v2.6 statement import
-Open **Transactions → Import statement** or **Settings → Import statement**.
-
-Supported input:
-- Text-based PDF bank statements
-- Scanned PDF statements (local OCR fallback, first 8 scanned pages)
-- CSV exports
-- Statement screenshots/images
-
-Rahman Expense:
-1. Reads the file locally in the browser.
-2. Detects transaction rows one-by-one.
-3. Treats debit purchases as expenses.
-4. Treats deposits/refunds as income when detected.
-5. Treats credit-card repayments, minimum-due settlements, WAMD/outward transfers and similar rows as **transfers** so purchases are not double-counted.
-6. Suggests expense categories using merchant rules and keywords.
-7. Shows a review screen before saving.
-8. Flags likely duplicates using date, type, amount, merchant/reference and an import fingerprint.
-9. Saves selected rows as individual Rahman Expense transactions and syncs them through Supabase.
-
-## Credit-card statements
-A credit-card statement can be imported the same way. Purchases are added as individual expenses. Payment/settlement rows are marked as transfers by default. Always review detected rows before saving because bank layouts vary.
-
-## PDF invoice / receipt
-The receipt scanner now also accepts a single PDF invoice. It extracts PDF text locally, then fills amount, merchant, date and category for confirmation.
+1. Upload all v2.8 files to `RahimanHub/rahman-expense`, replacing the existing files.
+2. Wait for GitHub Pages to deploy.
+3. Check `https://rahimanhub.github.io/rahman-expense/VERSION.txt` — it should show **v2.8**.
+4. Open `https://rahimanhub.github.io/rahman-expense/refresh.html` once.
+5. Open the normal app URL.
+6. Run the new `supabase_schema.sql` in Supabase SQL Editor, then press **Sync now** in Rahman Expense Settings.
 
 ## Privacy
-Statement and receipt files are temporary and are not uploaded to Rahman Expense cloud storage. Confirmed transaction data only is synchronized to Supabase. PDF.js/Tesseract libraries are loaded in the browser from jsDelivr.
-
-## Supabase
-No database schema change is required from v2.5 for statement import. Continue using the same Supabase Project URL, publishable key, email and password. Never use a secret/service_role key in the browser app.
+Receipt/statement files are processed temporarily in the browser and are not stored in Supabase. Only confirmed transaction data is synchronized.

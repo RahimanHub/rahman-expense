@@ -1,19 +1,24 @@
 'use strict';
 
-const APP_VERSION = '2.6';
-const APP_CURRENCY = 'KWD';
-const CURRENCY_DECIMALS = 3;
+const APP_VERSION = '2.8';
+const COUNTRIES = {
+  KW: { name: 'Kuwait', flag: '🇰🇼', currency: 'KWD', decimals: 3 },
+  IN: { name: 'India', flag: '🇮🇳', currency: 'INR', decimals: 2 }
+};
 const DB_NAME = 'rahman-expense-v2-db';
 const DB_STORE = 'kv';
 const STATE_KEY = 'rahman_expense_state_v2';
 const CLOUD_CONFIG_KEY = 'rahman_expense_cloud_config_v2';
 
+// The same category structure is used for Kuwait and India.
+// Shopping is intentionally split so personal purchases and home purchases never mix.
 const CATEGORIES = {
   Housing: { icon: '🏠', subs: ['Rent', 'Maintenance', 'Furniture', 'Other'] },
   Food: { icon: '🍽️', subs: ['Groceries', 'Restaurant', 'Delivery', 'Coffee', 'Other'] },
   Transport: { icon: '🚕', subs: ['Fuel', 'Taxi', 'Public Transport', 'Parking', 'Other'] },
   Vehicle: { icon: '🚗', subs: ['Maintenance', 'Insurance', 'Registration', 'Other'] },
-  Shopping: { icon: '🛍️', subs: ['General', 'Clothing', 'Electronics', 'Home', 'Other'] },
+  'Personal Shopping': { icon: '🛍️', subs: ['Clothing', 'Electronics', 'Accessories', 'Personal Items', 'General', 'Other'] },
+  'Home Shopping': { icon: '🛒', subs: ['Furniture', 'Appliances', 'Kitchen', 'Home Supplies', 'Decor', 'General', 'Other'] },
   Utilities: { icon: '💡', subs: ['Electricity', 'Water', 'Gas', 'Other'] },
   Internet: { icon: '🌐', subs: ['Home Internet', 'Other'] },
   Mobile: { icon: '📱', subs: ['Plan', 'Recharge', 'Other'] },
@@ -32,18 +37,19 @@ const CATEGORIES = {
 const PALETTE = ['#24685d','#c16b44','#667ac4','#b38b34','#865b9e','#4b8b88','#bf5f68','#728151','#4c6d91','#9b6d55','#7c6f9c','#5d8b63','#a0657b','#7a7f46','#4e8096','#9c6b3e','#6d738f','#7e6c5e'];
 
 const MERCHANT_HINTS = [
-  [/lulu|carrefour|sultan|hypermarket|supermarket|coop|co-op|grocery/i, ['Food','Groceries']],
-  [/kfc|mcdonald|burger|restaurant|cafe|coffee|starbucks|pizza|talabat|deliveroo/i, ['Food','Restaurant']],
-  [/ooredoo|zain|stc|mobile|telecom/i, ['Mobile','Plan']],
-  [/knpc|fuel|petrol|gas station|shell/i, ['Transport','Fuel']],
+  [/lulu|carrefour|sultan|hypermarket|supermarket|coop|co-op|grocery|reliance fresh|dmart|more supermarket/i, ['Food','Groceries']],
+  [/kfc|mcdonald|burger|restaurant|cafe|coffee|starbucks|pizza|talabat|deliveroo|swiggy|zomato/i, ['Food','Restaurant']],
+  [/ooredoo|zain|stc|jio|airtel|vi |vodafone|mobile|telecom/i, ['Mobile','Plan']],
+  [/knpc|fuel|petrol|gas station|shell|indian oil|bharat petroleum|hpcl/i, ['Transport','Fuel']],
   [/boots|pharmacy|chemist|clinic|hospital|medical|laboratory|lab /i, ['Health','Pharmacy']],
   [/school|academy|tuition|university|college/i, ['Education','Fees']],
   [/internet|broadband|fiber|wifi/i, ['Internet','Home Internet']],
-  [/electric|electricity|water ministry|utility/i, ['Utilities','Electricity']],
-  [/uber|careem|taxi/i, ['Transport','Taxi']],
+  [/electric|electricity|kseb|tneb|bescom|mew|water ministry|utility/i, ['Utilities','Electricity']],
+  [/uber|careem|ola|taxi/i, ['Transport','Taxi']],
   [/cinema|netflix|spotify|youtube premium|subscription/i, ['Entertainment','Subscriptions']],
-  [/hotel|airways|airline|booking\.com|expedia/i, ['Travel','Other']]
-,
+  [/hotel|airways|airline|booking\.com|expedia|indigo|air india/i, ['Travel','Other']],
+  [/ikea|home centre|home center|homebox|home box|furniture|appliance|kitchen|hardware/i, ['Home Shopping','General']],
+  [/zara|h&m|hm |max fashion|centrepoint|clothing|fashion|shoes|footwear|cosmetic|perfume/i, ['Personal Shopping','General']],
   [/parking|municipal park|pumc/i, ['Transport','Parking']],
   [/station|service station/i, ['Transport','Fuel']]
 ];
@@ -66,8 +72,8 @@ const defaultState = () => ({
     remoteMerchantIds: {}
   },
   settings: {
-    currency: APP_CURRENCY,
-    openingBalance: 0,
+    activeCountry: 'KW',
+    openingBalances: { KW: 0, IN: 0 },
     deleteReceiptAfterSave: true,
     warning75: true,
     warning90: true,
@@ -76,6 +82,7 @@ const defaultState = () => ({
 });
 
 let state = defaultState();
+let country = 'KW';
 let view = 'dashboard';
 let month = currentMonth();
 let txFilter = { search: '', type: 'all', category: 'all' };
@@ -126,19 +133,67 @@ async function getCloudClient(){
   cloudClient=createClient(cfg.url,cfg.anonKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
   return cloudClient;
 }
+function normalizeCategoryName(cat='', sub=''){
+  if(cat==='Shopping') return sub==='Home'?'Home Shopping':'Personal Shopping';
+  if(cat==='Clothes') return 'Personal Shopping';
+  return CATEGORIES[cat]?cat:'Other';
+}
+function countryMeta(c=country){ return COUNTRIES[c]||COUNTRIES.KW; }
+function merchantRuleKey(merchant='',c=country){ return `${c}|${String(merchant).trim().toLowerCase()}`; }
 function normalizeState(){
+  state.version=APP_VERSION;
   state.syncMeta={...defaultState().syncMeta,...(state.syncMeta||{})};
   state.syncMeta.deletedTransactions=Array.isArray(state.syncMeta.deletedTransactions)?state.syncMeta.deletedTransactions:[];
   state.syncMeta.budgetUpdated=state.syncMeta.budgetUpdated||{};
   state.syncMeta.budgetDeleted=state.syncMeta.budgetDeleted||{};
   state.syncMeta.remoteBudgetIds=state.syncMeta.remoteBudgetIds||{};
   state.syncMeta.remoteMerchantIds=state.syncMeta.remoteMerchantIds||{};
+  const legacyOpening=n(state.settings?.openingBalance);
+  const hadOpeningBalances=!!state.settings?.openingBalances;
+  state.settings={...defaultState().settings,...(state.settings||{})};
+  if(!hadOpeningBalances){ state.settings.openingBalances={KW:legacyOpening,IN:0}; }
+  state.settings.openingBalances={KW:n(state.settings.openingBalances?.KW),IN:n(state.settings.openingBalances?.IN)};
+  state.settings.activeCountry=COUNTRIES[state.settings.activeCountry]?state.settings.activeCountry:'KW';
+  country=state.settings.activeCountry;
+
   state.transactions=(state.transactions||[]).map(t=>({
     ...t,
     id:validUuid(t.id)?t.id:uid(),
+    country:COUNTRIES[t.country]?t.country:'KW',
+    category:t.type==='expense'?normalizeCategoryName(t.category,t.subcategory):'',
+    subcategory:t.type==='expense'?(t.category==='Shopping'&&t.subcategory==='Home'?'General':t.subcategory||'Other'):'',
     createdAt:t.createdAt||new Date().toISOString(),
     updatedAt:t.updatedAt||t.createdAt||new Date().toISOString()
   }));
+
+  // v2.7 and earlier stored budgets by month only. Preserve them as Kuwait budgets.
+  const nextBudgets={};
+  for(const [key,cats] of Object.entries(state.budgets||{})){
+    const target=/^(KW|IN)\|\d{4}-\d{2}$/.test(key)?key:`KW|${key}`;
+    nextBudgets[target]=nextBudgets[target]||{};
+    for(const [cat,val] of Object.entries(cats||{})){
+      const nc=normalizeCategoryName(cat,cat==='Shopping'?'General':'');
+      nextBudgets[target][nc]=(nextBudgets[target][nc]||0)+n(val);
+    }
+  }
+  state.budgets=nextBudgets;
+
+  const nextRules={};
+  for(const [key,val] of Object.entries(state.merchantRules||{})){
+    const pref=/^(KW|IN)\|/.test(key)?key:`KW|${key}`;
+    nextRules[pref]={category:normalizeCategoryName(val?.category,val?.subcategory),subcategory:val?.subcategory||'Other'};
+  }
+  state.merchantRules=nextRules;
+
+  const remapMeta=(obj={})=>{
+    const out={};
+    for(const [k,v] of Object.entries(obj||{})) out[/^(KW|IN)\|/.test(k)?k:`KW|${k}`]=v;
+    return out;
+  };
+  state.syncMeta.budgetUpdated=remapMeta(state.syncMeta.budgetUpdated);
+  state.syncMeta.budgetDeleted=remapMeta(state.syncMeta.budgetDeleted);
+  for(const [id,key] of Object.entries(state.syncMeta.remoteBudgetIds||{})) if(!/^(KW|IN)\|/.test(key)) state.syncMeta.remoteBudgetIds[id]=`KW|${key}`;
+  for(const [id,key] of Object.entries(state.syncMeta.remoteMerchantIds||{})) if(!/^(KW|IN)\|/.test(key)) state.syncMeta.remoteMerchantIds[id]=`KW|${key}`;
 }
 function cloudStateText(){
   if(!cloudStatus.configured) return 'Local only';
@@ -147,13 +202,14 @@ function cloudStateText(){
   if(cloudStatus.authenticated) return 'Connected';
   return 'Configured · sign in required';
 }
-function budgetKey(m,cat){ return `${m}|${cat}`; }
-function splitBudgetKey(key){ const i=key.indexOf('|'); return [key.slice(0,i),key.slice(i+1)]; }
+function budgetKey(m,cat,c=country){ return `${c}|${m}|${cat}`; }
+function splitBudgetKey(key){ const p=String(key).split('|'); return p.length>=3?[p[0],p[1],p.slice(2).join('|')]:['KW',p[0]||'',p.slice(1).join('|')]; }
 function remoteTxToLocal(r){
-  return {id:r.id,type:r.type,amount:n(r.amount),merchant:r.merchant||'',category:r.category||'',subcategory:r.subcategory||'',date:r.txn_date,payment:r.payment_method||'',note:r.note||'',createdAt:r.created_at,updatedAt:r.updated_at};
+  const rc=COUNTRIES[r.country]?r.country:'KW';
+  return {id:r.id,country:rc,type:r.type,amount:n(r.amount),merchant:r.merchant||'',category:r.type==='expense'?normalizeCategoryName(r.category,r.subcategory):'',subcategory:r.subcategory||'',date:r.txn_date,payment:r.payment_method||'',note:r.note||'',createdAt:r.created_at,updatedAt:r.updated_at};
 }
 function localTxToRemote(t,userId){
-  return {id:t.id,user_id:userId,type:t.type,amount:n(t.amount),merchant:t.merchant||null,category:t.category||null,subcategory:t.subcategory||null,txn_date:t.date,payment_method:t.payment||null,note:t.note||null,receipt_retained:false,created_at:t.createdAt||new Date().toISOString(),updated_at:t.updatedAt||new Date().toISOString()};
+  return {id:t.id,user_id:userId,country:COUNTRIES[t.country]?t.country:'KW',type:t.type,amount:n(t.amount),merchant:t.merchant||null,category:t.category||null,subcategory:t.subcategory||null,txn_date:t.date,payment_method:t.payment||null,note:t.note||null,receipt_retained:false,created_at:t.createdAt||new Date().toISOString(),updated_at:t.updatedAt||new Date().toISOString()};
 }
 
 async function stopRealtime(){
@@ -195,18 +251,19 @@ function applyRealtimePayload(table,payload,userId){
     if(event==='DELETE'){
       const key=state.syncMeta.remoteBudgetIds?.[old.id];
       if(key){
-        const [m,cat]=splitBudgetKey(key);
-        if(state.budgets[m]){
-          delete state.budgets[m][cat];
-          if(!Object.keys(state.budgets[m]).length) delete state.budgets[m];
+        const [c,m,cat]=splitBudgetKey(key);
+        const bucketKey=`${c}|${m}`;
+        if(state.budgets[bucketKey]){
+          delete state.budgets[bucketKey][cat];
+          if(!Object.keys(state.budgets[bucketKey]).length) delete state.budgets[bucketKey];
         }
         delete state.syncMeta.budgetUpdated[key];
         delete state.syncMeta.budgetDeleted[key];
         delete state.syncMeta.remoteBudgetIds[old.id];
       }
     }else if(row.user_id===userId && row.id){
-      const m=String(row.budget_month).slice(0,7), key=budgetKey(m,row.category);
-      ensureBudgetMonth(m)[row.category]=n(row.planned_amount);
+      const c=COUNTRIES[row.country]?row.country:'KW', m=String(row.budget_month).slice(0,7), cat=normalizeCategoryName(row.category,''), key=budgetKey(m,cat,c);
+      ensureBudgetMonth(m,c)[cat]=n(row.planned_amount);
       state.syncMeta.budgetUpdated[key]=row.updated_at||new Date().toISOString();
       delete state.syncMeta.budgetDeleted[key];
       state.syncMeta.remoteBudgetIds[row.id]=key;
@@ -219,12 +276,14 @@ function applyRealtimePayload(table,payload,userId){
         delete state.syncMeta.remoteMerchantIds[old.id];
       }
     }else if(row.user_id===userId && row.id){
-      state.merchantRules[row.merchant_key]={category:row.category,subcategory:row.subcategory||''};
-      state.syncMeta.remoteMerchantIds[row.id]=row.merchant_key;
+      const c=COUNTRIES[row.country]?row.country:'KW', localKey=merchantRuleKey(row.merchant_key,c);
+      state.merchantRules[localKey]={category:normalizeCategoryName(row.category,row.subcategory),subcategory:row.subcategory||''};
+      state.syncMeta.remoteMerchantIds[row.id]=localKey;
     }
   }else if(table==='profiles'){
     if(event!=='DELETE' && row.id===userId){
-      state.settings.openingBalance=n(row.opening_balance);
+      state.settings.openingBalances.KW=n(row.opening_balance);
+      state.settings.openingBalances.IN=n(row.opening_balance_inr);
       state.syncMeta.profileUpdatedAt=row.updated_at||new Date().toISOString();
     }
   }
@@ -364,29 +423,32 @@ async function syncCloud(silent=false){
     state.syncMeta.deletedTransactions=[...tomb].map(([id,deletedAt])=>({id,deletedAt}));
 
     for(const r of (budgetRes.data||[])){
-      const m=String(r.budget_month).slice(0,7), key=budgetKey(m,r.category);
+      const c=COUNTRIES[r.country]?r.country:'KW';
+      const m=String(r.budget_month).slice(0,7), cat=normalizeCategoryName(r.category,''), key=budgetKey(m,cat,c);
       if(r.id) state.syncMeta.remoteBudgetIds[r.id]=key;
       const localTs=state.syncMeta.budgetUpdated[key]||'';
       const delTs=state.syncMeta.budgetDeleted[key]||'';
       const remoteTs=r.updated_at||'';
       if(delTs && new Date(delTs)>=new Date(remoteTs)) continue;
-      const exists=Object.prototype.hasOwnProperty.call(state.budgets[m]||{},r.category);
+      const exists=Object.prototype.hasOwnProperty.call(state.budgets[`${c}|${m}`]||{},cat);
       if(!exists || !localTs || new Date(remoteTs)>new Date(localTs)){
-        ensureBudgetMonth(m)[r.category]=n(r.planned_amount);
+        ensureBudgetMonth(m,c)[cat]=n(r.planned_amount);
         state.syncMeta.budgetUpdated[key]=remoteTs;
         delete state.syncMeta.budgetDeleted[key];
       }
     }
 
     for(const r of (merchantRes.data||[])){
-      if(r.id) state.syncMeta.remoteMerchantIds[r.id]=r.merchant_key;
-      if(!state.merchantRules[r.merchant_key]) state.merchantRules[r.merchant_key]={category:r.category,subcategory:r.subcategory||''};
+      const c=COUNTRIES[r.country]?r.country:'KW', localKey=merchantRuleKey(r.merchant_key,c);
+      if(r.id) state.syncMeta.remoteMerchantIds[r.id]=localKey;
+      if(!state.merchantRules[localKey]) state.merchantRules[localKey]={category:normalizeCategoryName(r.category,r.subcategory),subcategory:r.subcategory||''};
     }
     const prof=profileRes.data;
     if(prof){
       const localTs=state.syncMeta.profileUpdatedAt||'';
       if(!localTs || new Date(prof.updated_at)>new Date(localTs)){
-        state.settings.openingBalance=n(prof.opening_balance);
+        state.settings.openingBalances.KW=n(prof.opening_balance);
+        state.settings.openingBalances.IN=n(prof.opening_balance_inr);
         state.syncMeta.profileUpdatedAt=prof.updated_at;
       }
     }
@@ -399,24 +461,48 @@ async function syncCloud(silent=false){
       const {error}=await client.from('transactions').delete().eq('user_id',userId).in('id',ids); if(error) throw error;
       state.syncMeta.deletedTransactions=[];
     }
+
     const budgetRows=[];
-    Object.entries(state.budgets).forEach(([m,cats])=>Object.entries(cats||{}).forEach(([cat,val])=>budgetRows.push({user_id:userId,budget_month:`${m}-01`,category:cat,planned_amount:n(val),updated_at:state.syncMeta.budgetUpdated[budgetKey(m,cat)]||new Date().toISOString()})));
-    if(budgetRows.length){ const {data:budgetUpsertData,error}=await client.from('monthly_budgets').upsert(budgetRows,{onConflict:'user_id,budget_month,category'}).select('id,budget_month,category'); if(error) throw error; for(const r of (budgetUpsertData||[])){state.syncMeta.remoteBudgetIds[r.id]=budgetKey(String(r.budget_month).slice(0,7),r.category);} }
+    Object.entries(state.budgets).forEach(([bucket,cats])=>{
+      const [c,m]=bucket.split('|'); if(!COUNTRIES[c]||!/^\d{4}-\d{2}$/.test(m)) return;
+      Object.entries(cats||{}).forEach(([cat,val])=>budgetRows.push({user_id:userId,country:c,budget_month:`${m}-01`,category:cat,planned_amount:n(val),updated_at:state.syncMeta.budgetUpdated[budgetKey(m,cat,c)]||new Date().toISOString()}));
+    });
+    if(budgetRows.length){
+      const {data:budgetUpsertData,error}=await client.from('monthly_budgets').upsert(budgetRows,{onConflict:'user_id,country,budget_month,category'}).select('id,country,budget_month,category');
+      if(error) throw error;
+      for(const r of (budgetUpsertData||[])){const c=COUNTRIES[r.country]?r.country:'KW';state.syncMeta.remoteBudgetIds[r.id]=budgetKey(String(r.budget_month).slice(0,7),r.category,c);}
+    }
     const deletedBudgetKeys=Object.keys(state.syncMeta.budgetDeleted||{});
     for(const key of deletedBudgetKeys){
-      const [m,cat]=splitBudgetKey(key);
-      const {error}=await client.from('monthly_budgets').delete().eq('user_id',userId).eq('budget_month',`${m}-01`).eq('category',cat); if(error) throw error;
+      const [c,m,cat]=splitBudgetKey(key);
+      const {error}=await client.from('monthly_budgets').delete().eq('user_id',userId).eq('country',c).eq('budget_month',`${m}-01`).eq('category',cat); if(error) throw error;
       delete state.syncMeta.budgetDeleted[key];
     }
-    const merchantRows=Object.entries(state.merchantRules||{}).map(([merchant_key,v])=>({user_id:userId,merchant_key,category:v.category,subcategory:v.subcategory||null}));
-    if(merchantRows.length){ const {data:merchantUpsertData,error}=await client.from('merchant_rules').upsert(merchantRows,{onConflict:'user_id,merchant_key'}).select('id,merchant_key'); if(error) throw error; for(const r of (merchantUpsertData||[])){state.syncMeta.remoteMerchantIds[r.id]=r.merchant_key;} }
+
+    const merchantRows=Object.entries(state.merchantRules||{}).map(([localKey,v])=>{
+      const split=localKey.indexOf('|'); const c=split>0?localKey.slice(0,split):'KW'; const merchant_key=split>0?localKey.slice(split+1):localKey;
+      return {user_id:userId,country:COUNTRIES[c]?c:'KW',merchant_key,category:v.category,subcategory:v.subcategory||null};
+    });
+    if(merchantRows.length){
+      const {data:merchantUpsertData,error}=await client.from('merchant_rules').upsert(merchantRows,{onConflict:'user_id,country,merchant_key'}).select('id,country,merchant_key');
+      if(error) throw error;
+      for(const r of (merchantUpsertData||[])){const c=COUNTRIES[r.country]?r.country:'KW';state.syncMeta.remoteMerchantIds[r.id]=merchantRuleKey(r.merchant_key,c);}
+    }
+
     const now=new Date().toISOString();
-    const {error:profileError}=await client.from('profiles').upsert({id:userId,display_name:cloudStatus.email||null,currency:APP_CURRENCY,opening_balance:n(state.settings.openingBalance),updated_at:state.syncMeta.profileUpdatedAt||now},{onConflict:'id'}); if(profileError) throw profileError;
+    const {error:profileError}=await client.from('profiles').upsert({
+      id:userId,
+      display_name:cloudStatus.email||null,
+      currency:'KWD',
+      opening_balance:n(state.settings.openingBalances.KW),
+      opening_balance_inr:n(state.settings.openingBalances.IN),
+      updated_at:state.syncMeta.profileUpdatedAt||now
+    },{onConflict:'id'}); if(profileError) throw profileError;
 
     cloudStatus.lastSync=now;
     await saveState();
-    if(!silent) toast('iPhone/laptop cloud sync complete.');
-  }catch(err){ cloudStatus.error=err?.message||'Sync failed.'; if(!silent) toast(`Sync failed: ${cloudStatus.error}`); }
+    if(!silent) toast('Kuwait and India cloud sync complete.');
+  }catch(err){ const raw=err?.message||'Sync failed.'; cloudStatus.error=/country|opening_balance_inr|no unique|on conflict/i.test(raw)?'v2.8 database update required — run the new supabase_schema.sql once in Supabase SQL Editor.':raw; if(!silent) toast(`Sync failed: ${cloudStatus.error}`); }
   finally{ cloudStatus.syncing=false; render(); }
 }
 async function initCloud(){
@@ -432,8 +518,9 @@ function uid() { return crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()
 function escapeHtml(v='') { return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
 function clamp(n,min,max){ return Math.max(min,Math.min(max,n)); }
 function n(v){ const x = Number(v); return Number.isFinite(x) ? x : 0; }
-function money(v){
-  return `${APP_CURRENCY} ${n(v).toLocaleString(undefined,{minimumFractionDigits:CURRENCY_DECIMALS,maximumFractionDigits:CURRENCY_DECIMALS})}`;
+function money(v,c=country){
+  const meta=countryMeta(c);
+  return `${meta.currency} ${n(v).toLocaleString(undefined,{minimumFractionDigits:meta.decimals,maximumFractionDigits:meta.decimals})}`;
 }
 function monthLabel(m){
   const [y,mo] = m.split('-').map(Number);
@@ -450,14 +537,20 @@ function previousMonth(m=month){
   const d = new Date(Date.UTC(y,mo-2,15));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
 }
-function monthTransactions(m=month){ return state.transactions.filter(t => String(t.date||'').startsWith(m)); }
+function countryMonthKey(c=country,m=month){ return `${c}|${m}`; }
+function countryTransactions(c=country){ return state.transactions.filter(t=>(COUNTRIES[t.country]?t.country:'KW')===c); }
+function monthTransactions(m=month,c=country){ return state.transactions.filter(t => (COUNTRIES[t.country]?t.country:'KW')===c && String(t.date||'').startsWith(m)); }
 function sumType(list,type){ return list.filter(t=>t.type===type).reduce((a,t)=>a+n(t.amount),0); }
 function categorySpend(list,cat){ return list.filter(t=>t.type==='expense'&&t.category===cat).reduce((a,t)=>a+n(t.amount),0); }
-function totalBudget(m=month){ return Object.values(state.budgets[m]||{}).reduce((a,v)=>a+n(v),0); }
-function budgetFor(cat,m=month){ return n(state.budgets[m]?.[cat]); }
-function ensureBudgetMonth(m=month){ if(!state.budgets[m]) state.budgets[m] = {}; return state.budgets[m]; }
+function totalBudget(m=month,c=country){ return Object.values(state.budgets[countryMonthKey(c,m)]||{}).reduce((a,v)=>a+n(v),0); }
+function budgetFor(cat,m=month,c=country){ return n(state.budgets[countryMonthKey(c,m)]?.[cat]); }
+function ensureBudgetMonth(m=month,c=country){ const k=countryMonthKey(c,m); if(!state.budgets[k]) state.budgets[k] = {}; return state.budgets[k]; }
+function openingBalance(c=country){ return n(state.settings.openingBalances?.[c]); }
 function safeDate(value){ return /^\d{4}-\d{2}-\d{2}$/.test(value||'') ? value : today(); }
-
+function paymentMethods(c=country){ return c==='IN'?['UPI','Debit Card','Credit Card','Cash','Bank Transfer','Net Banking','Other']:['KNET / Debit','Credit Card','Cash','Bank Transfer','Apple Pay','Other']; }
+function countryTabsHtml(){
+  return `<div class="country-tabs" role="tablist" aria-label="Expense country">${Object.entries(COUNTRIES).map(([code,meta])=>`<button type="button" class="country-tab ${country===code?'active':''}" data-country="${code}" role="tab" aria-selected="${country===code}"><span>${meta.flag}</span><b>${meta.name}</b><small>${meta.currency}</small></button>`).join('')}</div>`;
+}
 async function openDB(){
   return new Promise((resolve,reject)=>{
     if(!('indexedDB' in window)) return resolve(null);
@@ -494,31 +587,31 @@ async function dbSet(key,value){
     });
   }catch(e){ localStorage.setItem(key,JSON.stringify(value)); }
 }
-async function saveState(){ state.settings.currency=APP_CURRENCY; await dbSet(STATE_KEY,state); }
+async function saveState(){ state.settings.activeCountry=country; await dbSet(STATE_KEY,state); }
 
 function migrateLegacy(legacy){
   if(!legacy || !Array.isArray(legacy.tx)) return null;
   const next=defaultState();
-  next.settings.currency = APP_CURRENCY;
-  next.settings.openingBalance = n(legacy.open);
+  next.settings.activeCountry='KW';
+  next.settings.openingBalances={KW:n(legacy.open),IN:0};
   const catMap={
     'Rent - Housing':['Housing','Rent'],'Home Internet':['Internet','Home Internet'],'Mobile Plans':['Mobile','Plan'],Bills:['Utilities','Other'],
     'Car Fuel':['Transport','Fuel'],'Car Maintenance':['Vehicle','Maintenance'],Transport:['Transport','Other'],
     'Health - Consultation':['Health','Consultation'],'Health - Pharmacy':['Health','Pharmacy'],'Health - IV':['Health','Injection / IV'],
     'Health - Injection':['Health','Injection / IV'],'Health - Tests':['Health','Tests'],'Health - Other':['Health','Other'],
     'School - Fees':['Education','Fees'],'School - Transportation':['Education','Transportation'],'School - Uniforms':['Education','Uniforms'],
-    'School - Books':['Education','Books'],'School - Others':['Education','Other'],Shopping:['Shopping','General'],Clothes:['Shopping','Clothing'],
+    'School - Books':['Education','Books'],'School - Others':['Education','Other'],Shopping:['Personal Shopping','General'],Clothes:['Personal Shopping','Clothing'],
     Food:['Food','Other'],'Personal Misc':['Personal','Other'],Other:['Other','Uncategorized']
   };
   next.transactions=legacy.tx.map(t=>{
     const mapped=catMap[t.cat]||['Other','Uncategorized'];
-    return {id:String(t.id||uid()),type:t.type||'expense',amount:n(t.amt),merchant:'',category:mapped[0],subcategory:mapped[1],date:safeDate(t.date),payment:'',note:t.note||'',createdAt:new Date().toISOString()};
+    return {id:String(t.id||uid()),country:'KW',type:t.type||'expense',amount:n(t.amt),merchant:'',category:mapped[0],subcategory:mapped[1],date:safeDate(t.date),payment:'',note:t.note||'',createdAt:new Date().toISOString()};
   });
   const current = currentMonth();
-  next.budgets[current]={};
+  next.budgets[`KW|${current}`]={};
   Object.entries(legacy.bud||{}).forEach(([old,val])=>{
     const mapped=catMap[old]||['Other'];
-    next.budgets[current][mapped[0]]=(next.budgets[current][mapped[0]]||0)+n(val);
+    next.budgets[`KW|${current}`][mapped[0]]=(next.budgets[`KW|${current}`][mapped[0]]||0)+n(val);
   });
   return next;
 }
@@ -526,7 +619,7 @@ function migrateLegacy(legacy){
 async function loadState(){
   const saved=await dbGet(STATE_KEY);
   if(saved && Array.isArray(saved.transactions)) {
-    state={...defaultState(),...saved,settings:{...defaultState().settings,...saved.settings,currency:APP_CURRENCY}};
+    state={...defaultState(),...saved,settings:{...defaultState().settings,...saved.settings}};
   } else {
     // v2.0+ intentionally uses the clean Rahman Expense storage namespace.
     // Older Ledgerly/Rahman Expense browser data is left untouched and is NOT auto-imported.
@@ -543,20 +636,22 @@ function navHtml(mobile=false){
   return `<${mobile?'div':'nav'} class="${mobile?'mobile-nav':'nav'}">${navItems().map(([k,i,label])=>`<button class="${mobile?'':'nav-btn'} ${view===k?'active':''}" data-nav="${k}"><span class="${mobile?'':'nav-icon'}">${i}</span>${label}</button>`).join('')}</${mobile?'div':'nav'}>`;
 }
 function shell(content,title,subtitle='',actions=''){
+  const meta=countryMeta();
   return `<div class="layout">
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">R</div><div><h1>Rahman Expense</h1><p>Personal expenses</p></div></div>
       ${navHtml(false)}
-      <div class="sidebar-footer">Private expense tracking<br><b>KWD only</b> · v${APP_VERSION}<br><span>Developed by Rahiman</span></div>
+      <div class="sidebar-footer">Private expense tracking<br><b>Kuwait KWD · India INR</b> · v${APP_VERSION}<br><span>Developed by Rahiman</span></div>
     </aside>
     <main class="main">
       <div class="mobile-brandbar" aria-label="Rahman Expense app information">
         <div class="mobile-brandmark">R</div>
-        <div class="mobile-brandcopy"><strong>Rahman Expense</strong><span>KWD only · v${APP_VERSION} · Developed by Rahiman</span></div>
+        <div class="mobile-brandcopy"><strong>Rahman Expense</strong><span>Kuwait + India · v${APP_VERSION} · Developed by Rahiman</span></div>
       </div>
+      <div class="country-tabs-wrap">${countryTabsHtml()}<div class="country-context">${meta.flag} <b>${meta.name}</b> expenses · ${meta.currency}</div></div>
       <div class="topbar"><div><h2>${escapeHtml(title)}</h2>${subtitle?`<div class="subtle">${escapeHtml(subtitle)}</div>`:''}</div><div class="actions">${actions}</div></div>
       ${content}
-      <div class="mobile-app-footer">Rahman Expense · KWD only · v${APP_VERSION}<br><span>Developed by Rahiman</span></div>
+      <div class="mobile-app-footer">Rahman Expense · Kuwait KWD + India INR · v${APP_VERSION}<br><span>Developed by Rahiman</span></div>
     </main>
     ${navHtml(true)}
   </div>`;
@@ -572,10 +667,11 @@ function dashboardView(){
   const remaining=budget-spent;
   const savings=income-spent-transfers;
   const used=budget?spent/budget*100:0;
-  const allIncome=sumType(state.transactions,'income');
-  const allExpense=sumType(state.transactions,'expense');
-  const allTransfer=sumType(state.transactions,'transfer');
-  const available=n(state.settings.openingBalance)+allIncome-allExpense-allTransfer;
+  const allCountryTx=countryTransactions();
+  const allIncome=sumType(allCountryTx,'income');
+  const allExpense=sumType(allCountryTx,'expense');
+  const allTransfer=sumType(allCountryTx,'transfer');
+  const available=openingBalance()+allIncome-allExpense-allTransfer;
   const catRows=Object.keys(CATEGORIES).map((cat,idx)=>({cat,idx,spent:categorySpend(tx,cat),budget:budgetFor(cat)})).filter(x=>x.spent>0||x.budget>0).sort((a,b)=>b.spent-a.spent);
   const latest=[...tx].sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.createdAt||'').localeCompare(String(a.createdAt||''))).slice(0,6);
   const budgetClass=used>=100?'over':used>=90?'warning':'';
@@ -730,8 +826,9 @@ function settingsView(){
   const content=`
     <div class="settings-grid">
       <div class="card"><h3>General</h3>
-        <div class="field"><label>Currency</label><div class="input" aria-label="Currency" style="display:flex;align-items:center;background:var(--surface-2, #f7f7f5);font-weight:700">KWD — Kuwaiti Dinar</div><div class="subtle" style="margin-top:6px">Rahman Expense is locked to KWD and all amounts use 3 decimal places.</div></div>
-        <div class="field" style="margin-top:12px"><label>Opening balance</label><input class="input" type="number" id="set-opening" step="0.001" value="${n(s.openingBalance)||''}" placeholder="0" /></div>
+        <div class="field"><label>Countries & currencies</label><div class="input" aria-label="Currencies" style="display:flex;align-items:center;background:var(--surface-2, #f7f7f5);font-weight:700">🇰🇼 Kuwait — KWD · 🇮🇳 India — INR</div><div class="subtle" style="margin-top:6px">Kuwait and India transactions, budgets and reports stay completely separate.</div></div>
+        <div class="field" style="margin-top:12px"><label>Kuwait opening balance (KWD)</label><input class="input" type="number" id="set-opening-KW" step="0.001" value="${n(s.openingBalances?.KW)||''}" placeholder="0.000" /></div>
+        <div class="field" style="margin-top:12px"><label>India opening balance (INR)</label><input class="input" type="number" id="set-opening-IN" step="0.01" value="${n(s.openingBalances?.IN)||''}" placeholder="0.00" /></div>
       </div>
       <div class="card"><h3>Receipt privacy</h3>
         <div class="setting-row"><div><b>Delete photo after save</b><div class="subtle">Receipt image stays only in memory during scanning.</div></div><label class="switch"><input id="set-delete-receipt" type="checkbox" ${s.deleteReceiptAfterSave?'checked':''}><span></span></label></div>
@@ -752,7 +849,7 @@ function settingsView(){
       <div class="card about-card"><h3>About Rahman Expense</h3>
         <div class="about-line"><span>Application</span><b>Rahman Expense</b></div>
         <div class="about-line"><span>Version</span><b>v${APP_VERSION}</b></div>
-        <div class="about-line"><span>Currency</span><b>KWD only</b></div>
+        <div class="about-line"><span>Currencies</span><b>KWD + INR</b></div>
         <div class="about-line"><span>Developer</span><b>Rahiman</b></div>
       </div>
     </div>
@@ -771,7 +868,7 @@ function settingsView(){
       <div class="sync-meta"><span><b>Account:</b> ${escapeHtml(cloudStatus.email||'Not signed in')}</span><span><b>Last sync:</b> ${escapeHtml(lastSync)}</span><span><b>Live:</b> ${escapeHtml(realtimeStatus==='SUBSCRIBED'?'On':realtimeStatus==='CONNECTING'?'Connecting…':'Off')}</span>${cloudStatus.error?`<span class="negative"><b>Status:</b> ${escapeHtml(cloudStatus.error)}</span>`:''}</div>
       <div class="privacy-note"><b>Privacy:</b> the Supabase <i>publishable key</i> (or legacy anon key) is appropriate for a browser app when Row Level Security is enabled. Never paste a Supabase <i>secret/service_role</i> key into Rahman Expense.</div>
     </div>`;
-  return shell(content,'Settings','KWD, private backup and real-time iPhone ↔ laptop synchronization.');
+  return shell(content,'Settings','Kuwait and India, private backup and real-time iPhone ↔ laptop synchronization.');
 }
 
 function render(){
@@ -782,6 +879,7 @@ function render(){
 
 function bindView(){
   document.querySelectorAll('[data-nav]').forEach(el=>el.addEventListener('click',()=>{view=el.dataset.nav;render()}));
+  document.querySelectorAll('[data-country]').forEach(el=>el.addEventListener('click',async()=>{const next=el.dataset.country;if(!COUNTRIES[next]||next===country)return;country=next;state.settings.activeCountry=country;txFilter={search:'',type:'all',category:'all'};await saveState();render();}));
   document.querySelectorAll('[data-month-shift]').forEach(el=>el.addEventListener('click',()=>shiftMonth(Number(el.dataset.monthShift))));
   document.querySelectorAll('[data-action="add"]').forEach(el=>el.addEventListener('click',()=>openTransactionModal()));
   document.querySelectorAll('[data-action="scan"]').forEach(el=>el.addEventListener('click',quickScanReceipt));
@@ -811,7 +909,7 @@ function bindView(){
   document.querySelectorAll('[data-action="cloud-sync"]').forEach(el=>el.addEventListener('click',()=>syncCloud(false)));
   document.querySelectorAll('[data-action="cloud-signout"]').forEach(el=>el.addEventListener('click',cloudSignOut));
 
-  const opening=document.getElementById('set-opening'); if(opening) opening.addEventListener('change',async e=>{state.settings.openingBalance=n(e.target.value);markProfileDirty();await saveState();queueCloudSync();toast('Opening balance saved.');});
+  for(const c of ['KW','IN']){ const opening=document.getElementById(`set-opening-${c}`); if(opening) opening.addEventListener('change',async e=>{state.settings.openingBalances[c]=n(e.target.value);markProfileDirty();await saveState();queueCloudSync();toast(`${COUNTRIES[c].name} opening balance saved.`);}); }
   const delRec=document.getElementById('set-delete-receipt'); if(delRec) delRec.addEventListener('change',async e=>{state.settings.deleteReceiptAfterSave=e.target.checked;await saveState();});
   document.querySelectorAll('[data-setting]').forEach(el=>el.addEventListener('change',async e=>{state.settings[e.target.dataset.setting]=e.target.checked;await saveState();}));
   const imp=document.getElementById('backup-import'); if(imp) imp.addEventListener('change',importBackup);
@@ -866,20 +964,21 @@ function quickScanReceipt(){
 function openTransactionModal(id=null,scan=false){
   modalTxId=id;
   const existing=id?state.transactions.find(t=>t.id===id):null;
-  const t=existing?{...existing}:{type:'expense',amount:'',merchant:'',category:'Food',subcategory:'Groceries',date:today(),payment:'',note:''};
+  const t=existing?{...existing}:{country,type:'expense',amount:'',merchant:'',category:'Food',subcategory:'Groceries',date:today(),payment:'',note:''};
+  const modalCountry=COUNTRIES[t.country]?t.country:country; const modalMeta=countryMeta(modalCountry);
   modalRoot.innerHTML=`<div class="modal-backdrop" id="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="Transaction editor">
-    <div class="modal-head"><div><h3>${existing?'Edit transaction':scan?'Scan receipt':'Add transaction'}</h3><div class="subtle">${scan?'Photo is used temporarily and not stored.':'Keep every entry clean and report-ready.'}</div></div><button class="btn icon" id="modal-close" aria-label="Close">×</button></div>
+    <div class="modal-head"><div><h3>${existing?'Edit transaction':scan?'Scan receipt':'Add transaction'}</h3><div class="subtle">${modalMeta.flag} ${modalMeta.name} · ${modalMeta.currency} · ${scan?'Photo is used temporarily and not stored.':'Keep every entry clean and report-ready.'}</div></div><button class="btn icon" id="modal-close" aria-label="Close">×</button></div>
     <form id="tx-form">
       <div class="modal-body">
         <div class="segmented" id="type-seg">${['expense','income','transfer'].map(x=>`<button type="button" data-type="${x}" class="${t.type===x?'active':''}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div>
         ${scan&&!existing?receiptScannerHtml():''}
         <div class="form-grid" style="margin-top:16px">
-          <div class="field"><label>Amount</label><input class="input" id="f-amount" type="number" min="0" step="0.001" required value="${escapeHtml(t.amount)}" placeholder="0.000" /></div>
+          <div class="field"><label>Amount (${modalMeta.currency})</label><input class="input" id="f-amount" type="number" min="0" step="${modalMeta.decimals===3?'0.001':'0.01'}" required value="${escapeHtml(t.amount)}" placeholder="${modalMeta.decimals===3?'0.000':'0.00'}" /></div>
           <div class="field"><label>Date</label><input class="input" id="f-date" type="date" required value="${escapeHtml(t.date)}" /></div>
           <div class="field span2"><label id="merchant-label">${t.type==='income'?'Income source':t.type==='transfer'?'Transferred to':'Merchant / payee'}</label><input class="input" id="f-merchant" value="${escapeHtml(t.merchant||'')}" placeholder="e.g. Lulu Hypermarket" /></div>
           <div class="field expense-only"><label>Category</label><select class="select" id="f-category">${Object.keys(CATEGORIES).map(c=>`<option ${t.category===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>
           <div class="field expense-only"><label>Subcategory</label><select class="select" id="f-subcategory"></select></div>
-          <div class="field"><label>Payment method</label><select class="select" id="f-payment"><option value="">Not specified</option>${['KNET / Debit','Credit Card','Cash','Bank Transfer','Apple Pay','Other'].map(x=>`<option ${t.payment===x?'selected':''}>${x}</option>`).join('')}</select></div>
+          <div class="field"><label>Payment method</label><select class="select" id="f-payment"><option value="">Not specified</option>${paymentMethods(modalCountry).map(x=>`<option ${t.payment===x?'selected':''}>${x}</option>`).join('')}</select></div>
           <div class="field"><label>Note</label><input class="input" id="f-note" value="${escapeHtml(t.note||'')}" placeholder="Optional note" /></div>
         </div>
       </div>
@@ -927,7 +1026,7 @@ async function saveTransactionFromModal(e){
   const cat=document.getElementById('f-category')?.value||'';
   const sub=document.getElementById('f-subcategory')?.value||'';
   const obj={
-    id:modalTxId||uid(), type, amount, merchant,
+    id:modalTxId||uid(), country:modalTxId?(state.transactions.find(t=>t.id===modalTxId)?.country||country):country, type, amount, merchant,
     category:type==='expense'?cat:'', subcategory:type==='expense'?sub:'',
     date:safeDate(document.getElementById('f-date').value),
     payment:document.getElementById('f-payment').value,
@@ -935,7 +1034,7 @@ async function saveTransactionFromModal(e){
     createdAt:modalTxId?(state.transactions.find(t=>t.id===modalTxId)?.createdAt||new Date().toISOString()):new Date().toISOString(),
     updatedAt:new Date().toISOString()
   };
-  if(type==='expense'&&merchant){ state.merchantRules[merchant.toLowerCase()]={category:cat,subcategory:sub}; }
+  if(type==='expense'&&merchant){ state.merchantRules[merchantRuleKey(merchant)]={category:cat,subcategory:sub}; }
   const i=state.transactions.findIndex(t=>t.id===obj.id); if(i>=0) state.transactions[i]=obj; else state.transactions.push(obj);
   await saveState(); queueCloudSync(); month=obj.date.slice(0,7); closeModal(); render();
   toast(`Transaction ${i>=0?'updated':'saved'}${state.settings.deleteReceiptAfterSave&&pendingReceiptFile?' · receipt photo deleted':''}.`);
@@ -1117,14 +1216,14 @@ function parseDateFlexible(raw=''){
   return `${y}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
 }
 function parseMoneyValue(raw=''){
-  const cleaned=String(raw).replace(/KWD|KD|د\.ك/gi,'').replace(/,/g,'').replace(/[^0-9.\-]/g,'');
+  const cleaned=String(raw).replace(/KWD|KD|INR|Rs\.?|د\.ك|₹/gi,'').replace(/,/g,'').replace(/[^0-9.\-]/g,'');
   const v=Number(cleaned); return Number.isFinite(v)?Math.abs(v):0;
 }
 function normalizeStatementText(s=''){ return String(s).replace(/\s+/g,' ').trim(); }
 function cleanStatementNarration(text=''){
   return normalizeStatementText(text)
     .replace(GENERIC_STATEMENT_WORDS,' ')
-    .replace(/\b(?:KWD|KD|KW)\b/gi,' ')
+    .replace(/\b(?:KWD|KD|KW|INR|RS)\b|₹/gi,' ')
     .replace(/\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b/g,' ')
     .replace(/\b\d{1,2}:(?:\d{0,2})?(?::\d{2})?-?\b/g,' ')
     .replace(/\s*[,;]+\s*/g,' ')
@@ -1153,23 +1252,57 @@ function simpleHash(input=''){
   return (h1>>>0).toString(16).padStart(8,'0');
 }
 function statementImportId(r){
-  return simpleHash([r.date,r.type,n(r.amount).toFixed(3),String(r.reference||'').toLowerCase(),normalizeStatementText(r.narration||r.merchant||'').toLowerCase()].join('|'));
+  return simpleHash([r.country||country,r.date,r.type,n(r.amount).toFixed(3),String(r.reference||'').toLowerCase(),normalizeStatementText(r.narration||r.merchant||'').toLowerCase()].join('|'));
 }
 function transactionHasImportId(t,id){ return String(t.note||'').includes(`[Import ID: ${id}]`); }
 function isStatementDuplicate(r){
   const id=r.importId||statementImportId(r);
-  if(state.transactions.some(t=>transactionHasImportId(t,id))) return true;
+  if(state.transactions.some(t=>(COUNTRIES[t.country]?t.country:'KW')===(r.country||country)&&transactionHasImportId(t,id))) return true;
   return state.transactions.some(t=>{
+    if((COUNTRIES[t.country]?t.country:'KW')!==(r.country||country)) return false;
     if(t.date!==r.date || t.type!==r.type || Math.abs(n(t.amount)-n(r.amount))>0.0005) return false;
     if(r.reference && String(t.note||'').toLowerCase().includes(String(r.reference).toLowerCase())) return true;
     return normalizeStatementText(t.merchant||'').toLowerCase()===normalizeStatementText(r.merchant||'').toLowerCase();
   });
 }
+function inferStatementDebitCredit(rows=[]){
+  const out=rows.map(r=>({...r,debit:n(r.debit),credit:n(r.credit)}));
+  const toleranceFor=(amount)=>Math.max(0.002,Math.min(0.050,n(amount)*0.01));
+  for(let i=0;i<out.length;i++){
+    const r=out[i];
+    if(r.debit>0 || r.credit>0) continue;
+    const amount=n(r.amount); if(!(amount>0)) continue;
+    const prev=i>0?out[i-1]:null;
+    if(prev && n(prev.balance)>0 && n(r.balance)>0){
+      const delta=n(r.balance)-n(prev.balance);
+      if(Math.abs(Math.abs(delta)-amount)<=toleranceFor(amount)){
+        if(delta<0) r.debit=amount; else if(delta>0) r.credit=amount;
+      }
+    }
+    if(!(r.debit>0||r.credit>0)){
+      const raw=`${r.rawAmount||''} ${r.narration||''}`;
+      if(/\bCR\b|credit received|cashback|refund|reversal|deposit/i.test(raw)) r.credit=amount;
+      else if(/\bDR\b|debit|withdrawal/i.test(raw)) r.debit=amount;
+    }
+    if(!(r.debit>0||r.credit>0)){
+      const hinted=statementTypeFor(r.narration,0,0,r.rawAmount);
+      if(hinted==='income') r.credit=amount; else r.debit=amount;
+    }
+  }
+  for(const r of out){
+    if(STATEMENT_TRANSFER_HINT.test(r.narration||'')) r.type='transfer';
+    else if(r.credit>0) r.type='income';
+    else r.type='expense';
+    r.direction=r.credit>0?'credit':'debit';
+  }
+  return out;
+}
+
 function prepareStatementRow(r,index){
   const type=r.type||statementTypeFor(r.narration,r.credit,r.debit,r.rawAmount);
   const merchant=r.merchant||deriveStatementMerchant(r.narration);
   const suggestion=type==='expense'?suggestCategory(merchant,r.narration):['Banking','Other'];
-  const row={...r,index,type,merchant,category:r.category||suggestion[0],subcategory:r.subcategory||suggestion[1],selected:true};
+  const row={...r,index,country,type,merchant,direction:r.direction||(n(r.credit)>0?'credit':'debit'),category:r.category||suggestion[0],subcategory:r.subcategory||suggestion[1],selected:true};
   row.importId=statementImportId(row); row.duplicate=isStatementDuplicate(row); if(row.duplicate) row.selected=false;
   return row;
 }
@@ -1184,9 +1317,9 @@ function parseStatementText(text=''){
     else if(current && !/tran date|transaction date|narration|description|reference|withdrawal|deposit|balance|debit|credit/i.test(line)) current.text+=` ${line}`;
   }
   if(current) chunks.push(current);
-  return chunks.map(c=>{
+  const parsed=chunks.map(c=>{
     const date=parseDateFlexible(c.dateRaw); const full=c.text;
-    const decimals=[...full.matchAll(/(?:KWD|KD)?\s*[-+]?\d{1,9}(?:,\d{3})*\.\d{2,3}\b/gi)].map(m=>({raw:m[0],v:parseMoneyValue(m[0]),index:m.index||0})).filter(x=>x.v>=0);
+    const decimals=[...full.matchAll(/(?:KWD|KD|INR|Rs\.?|₹)?\s*[-+]?\d{1,9}(?:,\d{3})*\.\d{2,3}\b/gi)].map(m=>({raw:m[0],v:parseMoneyValue(m[0]),index:m.index||0})).filter(x=>x.v>=0);
     if(!decimals.length) return null;
     // In bank statements the last decimal is normally running balance; in credit-card statements it is usually the transaction amount.
     const hasBalanceHeader=/\bbalance\b/i.test(text.slice(0,1500));
@@ -1201,8 +1334,9 @@ function parseStatementText(text=''){
     narration=normalizeStatementText(narration);
     const rawAmount=amountToken.raw;
     const type=statementTypeFor(narration,0,0,rawAmount);
-    return {date,narration,reference,amount:amountToken.v,type,balance,rawAmount};
+    return {date,narration,reference,debit:0,credit:0,amount:amountToken.v,type,balance,rawAmount};
   }).filter(Boolean);
+  return inferStatementDebitCredit(parsed);
 }
 
 function parseDelimitedLine(line,delimiter){
@@ -1220,7 +1354,7 @@ function parseStatementCsv(text=''){
   const headers=parseDelimitedLine(first,delimiter).map(h=>h.toLowerCase().trim());
   const find=(patterns)=>headers.findIndex(h=>patterns.some(p=>p.test(h)));
   const idx={date:find([/date/]),narr:find([/narration/,/description/,/details/,/merchant/]),ref:find([/reference/,/ref\b/]),debit:find([/withdrawal/,/debit/,/\bdr\b/]),credit:find([/deposit/,/credit/,/\bcr\b/]),amount:find([/^amount$/,/transaction amount/]),balance:find([/balance/])};
-  return lines.slice(1).map(line=>{
+  const parsed=lines.slice(1).map(line=>{
     const c=parseDelimitedLine(line,delimiter); const date=parseDateFlexible(c[idx.date]||''); if(!date) return null;
     const narration=normalizeStatementText(c[idx.narr]||''); const reference=idx.ref>=0?(c[idx.ref]||''):'';
     const debit=idx.debit>=0?parseMoneyValue(c[idx.debit]):0, credit=idx.credit>=0?parseMoneyValue(c[idx.credit]):0;
@@ -1228,19 +1362,21 @@ function parseStatementCsv(text=''){
     const rawAmount=idx.amount>=0?(c[idx.amount]||''):''; const type=statementTypeFor(narration,credit,debit,rawAmount);
     return {date,narration,reference,debit,credit,amount,type,balance:idx.balance>=0?parseMoneyValue(c[idx.balance]):0,rawAmount};
   }).filter(Boolean);
+  return inferStatementDebitCredit(parsed);
 }
 
 function categoryOptions(selected){ return Object.keys(CATEGORIES).map(c=>`<option ${c===selected?'selected':''}>${escapeHtml(c)}</option>`).join(''); }
 function showStatementReview(rows,fileName){
   const duplicates=rows.filter(r=>r.duplicate).length;
+  const debitCount=rows.filter(r=>n(r.debit)>0).length, creditCount=rows.filter(r=>n(r.credit)>0).length;
   modalRoot.innerHTML=`<div class="modal-backdrop" id="statement-backdrop"><div class="modal statement-modal wide" role="dialog" aria-modal="true" aria-label="Statement import review">
-    <div class="modal-head"><div><h3>Review statement import</h3><div class="subtle">${escapeHtml(fileName)} · ${rows.length} transaction${rows.length===1?'':'s'} detected${duplicates?` · ${duplicates} duplicate${duplicates===1?'':'s'} skipped`:''}</div></div><button class="btn icon" id="statement-close" aria-label="Close">×</button></div>
-    <div class="modal-body"><div class="statement-note"><b>Review before saving.</b> Debit purchases become expenses, deposits/refunds become income, and card repayments/settlements are marked as transfers to avoid double-counting.</div>
+    <div class="modal-head"><div><h3>Review statement import</h3><div class="subtle">${countryMeta().flag} ${countryMeta().name} · ${countryMeta().currency} · ${escapeHtml(fileName)} · ${rows.length} transaction${rows.length===1?'':'s'} · ${debitCount} Dr · ${creditCount} Cr${duplicates?` · ${duplicates} duplicate${duplicates===1?'':'s'} skipped`:''}</div></div><button class="btn icon" id="statement-close" aria-label="Close">×</button></div>
+    <div class="modal-body"><div class="statement-note"><b>Review before saving.</b> Rahman Expense reads both Debit (Dr) and Credit (Cr). Debits become expenses unless identified as transfers; credits become income/refunds; card repayments/settlements remain transfers to avoid double-counting.</div>
       <div class="statement-review-list">${rows.map((r,i)=>`<div class="statement-review-row ${r.duplicate?'is-duplicate':''}" data-statement-row="${i}">
         <label class="statement-check"><input type="checkbox" data-statement-select="${i}" ${r.selected?'checked':''} ${r.duplicate?'disabled':''}><span></span></label>
-        <div class="statement-main"><div class="statement-title">${escapeHtml(r.merchant||r.narration||'Transaction')}</div><div class="statement-meta">${escapeHtml(r.date)}${r.reference?` · Ref ${escapeHtml(r.reference)}`:''}${r.balance?` · Balance ${money(r.balance)}`:''}${r.duplicate?' · Already imported':''}</div><div class="statement-narration">${escapeHtml(r.narration||'')}</div></div>
+        <div class="statement-main"><div class="statement-title">${escapeHtml(r.merchant||r.narration||'Transaction')}</div><div class="statement-meta"><span class="statement-direction ${r.credit>0?'is-credit':'is-debit'}">${r.credit>0?'CR · Credit':'DR · Debit'}</span> · ${escapeHtml(r.date)}${r.reference?` · Ref ${escapeHtml(r.reference)}`:''}${r.balance?` · Balance ${money(r.balance)}`:''}${r.duplicate?' · Already imported':''}</div><div class="statement-narration">${escapeHtml(r.narration||'')}</div></div>
         <div class="statement-controls"><select class="select compact" data-statement-type="${i}"><option value="expense" ${r.type==='expense'?'selected':''}>Expense</option><option value="income" ${r.type==='income'?'selected':''}>Income</option><option value="transfer" ${r.type==='transfer'?'selected':''}>Transfer</option></select><select class="select compact" data-statement-category="${i}" ${r.type!=='expense'?'disabled':''}>${categoryOptions(r.category)}</select></div>
-        <div class="statement-amount ${r.type==='expense'?'negative':r.type==='income'?'positive':''}">${r.type==='income'?'+':'−'}${money(r.amount)}</div>
+        <div class="statement-amount ${r.credit>0?'positive':'negative'}"><small>${r.credit>0?'CR':'DR'}</small>${r.credit>0?'+':'−'}${money(r.amount)}</div>
       </div>`).join('')}</div>
     </div>
     <div class="modal-foot"><button class="btn" id="statement-cancel">Cancel</button><button class="btn primary" id="statement-save">Save selected transactions</button></div>
@@ -1251,6 +1387,8 @@ function showStatementReview(rows,fileName){
   document.querySelectorAll('[data-statement-select]').forEach(el=>el.addEventListener('change',e=>{pendingStatementRows[Number(e.target.dataset.statementSelect)].selected=e.target.checked;}));
   document.querySelectorAll('[data-statement-type]').forEach(el=>el.addEventListener('change',e=>{
     const i=Number(e.target.dataset.statementType), r=pendingStatementRows[i]; r.type=e.target.value;
+    if(r.type==='income'){ r.credit=n(r.amount); r.debit=0; r.direction='credit'; }
+    else { r.debit=n(r.amount); r.credit=0; r.direction='debit'; }
     const cat=document.querySelector(`[data-statement-category="${i}"]`); if(cat) cat.disabled=r.type!=='expense';
   }));
   document.querySelectorAll('[data-statement-category]').forEach(el=>el.addEventListener('change',e=>{const i=Number(e.target.dataset.statementCategory),r=pendingStatementRows[i];r.category=e.target.value;r.subcategory=CATEGORIES[r.category]?.subs?.[0]||'Other';}));
@@ -1263,10 +1401,10 @@ async function saveStatementImport(){
   for(const r of selected){
     const cat=r.type==='expense'?(r.category||'Other'):'';
     const sub=r.type==='expense'?(r.subcategory||CATEGORIES[cat]?.subs?.[0]||'Other'):'';
-    const noteParts=[`Imported from ${pendingStatementFileName}`];
+    const noteParts=[`Imported from ${pendingStatementFileName}`, r.credit>0?'Statement Credit (Cr)':'Statement Debit (Dr)'];
     if(r.narration) noteParts.push(r.narration); if(r.reference) noteParts.push(`Ref: ${r.reference}`); noteParts.push(`[Import ID: ${r.importId}]`);
-    state.transactions.push({id:uid(),type:r.type,amount:n(r.amount),merchant:r.merchant||deriveStatementMerchant(r.narration),category:cat,subcategory:sub,date:r.date,payment:'Bank / Card Statement',note:noteParts.join(' · '),createdAt:now,updatedAt:now});
-    if(r.type==='expense'&&r.merchant) state.merchantRules[r.merchant.toLowerCase()]={category:cat,subcategory:sub};
+    state.transactions.push({id:uid(),country:r.country||country,type:r.type,amount:n(r.amount),merchant:r.merchant||deriveStatementMerchant(r.narration),category:cat,subcategory:sub,date:r.date,payment:'Bank / Card Statement',note:noteParts.join(' · '),createdAt:now,updatedAt:now});
+    if(r.type==='expense'&&r.merchant) state.merchantRules[merchantRuleKey(r.merchant,r.country||country)]={category:cat,subcategory:sub};
   }
   const latest=[...selected].sort((a,b)=>String(b.date).localeCompare(String(a.date)))[0]; if(latest?.date) month=latest.date.slice(0,7);
   await saveState(); queueCloudSync(); const count=selected.length; closeStatementImport(); view='transactions'; txFilter={search:'',type:'all',category:'all'}; render(); toast(`${count} statement transaction${count===1?'':'s'} saved. Duplicate rows were skipped.`);
@@ -1279,7 +1417,7 @@ function parseReceiptText(text){
   const amountCandidates=[];
   for(const line of lines){
     if(/grand total|total due|amount due|net total|total/i.test(line)){
-      const nums=[...line.matchAll(/(?:KWD|KD|د\.ك)?\s*(\d{1,6}(?:[,.]\d{1,3})?)/gi)].map(m=>Number(m[1].replace(',','.'))).filter(x=>x>0);
+      const nums=[...line.matchAll(/(?:KWD|KD|INR|Rs\.?|د\.ك|₹)?\s*(\d{1,9}(?:[,.]\d{1,3})?)/gi)].map(m=>Number(m[1].replace(',','.'))).filter(x=>x>0);
       nums.forEach(v=>amountCandidates.push({v,score:/grand total|amount due|total due/i.test(line)?3:2}));
     }
   }
@@ -1302,27 +1440,28 @@ function parseReceiptText(text){
 
 function suggestCategory(merchant,text=''){
   const key=(merchant||'').trim().toLowerCase();
-  if(key && state.merchantRules[key]) return [state.merchantRules[key].category,state.merchantRules[key].subcategory];
+  const localKey=merchantRuleKey(key);
+  if(key && state.merchantRules[localKey]) return [state.merchantRules[localKey].category,state.merchantRules[localKey].subcategory];
   const hay=`${merchant||''} ${text}`;
   for(const [re,val] of MERCHANT_HINTS) if(re.test(hay)) return val;
   return ['Other','Uncategorized'];
 }
 
 async function copyPreviousBudget(){
-  const prev=state.budgets[previousMonth()];
+  const prev=state.budgets[countryMonthKey(country,previousMonth())];
   if(!prev||!Object.keys(prev).length){ toast(`No budget found for ${monthLabel(previousMonth())}.`); return; }
-  state.budgets[month]={...prev}; Object.keys(prev).forEach(cat=>markBudgetDirty(month,cat,false)); await saveState(); queueCloudSync(); render(); toast(`Copied ${monthLabel(previousMonth())} budget.`);
+  state.budgets[countryMonthKey()]={...prev}; Object.keys(prev).forEach(cat=>markBudgetDirty(month,cat,false)); await saveState(); queueCloudSync(); render(); toast(`Copied ${monthLabel(previousMonth())} budget.`);
 }
 async function clearBudget(){
   if(!confirm(`Clear all category budgets for ${monthLabel(month)}?`)) return;
-  Object.keys(state.budgets[month]||{}).forEach(cat=>markBudgetDirty(month,cat,true)); state.budgets[month]={}; await saveState(); queueCloudSync(); render(); toast('Monthly budget cleared.');
+  Object.keys(state.budgets[countryMonthKey()]||{}).forEach(cat=>markBudgetDirty(month,cat,true)); state.budgets[countryMonthKey()]={}; await saveState(); queueCloudSync(); render(); toast('Monthly budget cleared.');
 }
 
 function exportCsv(){
   const rows=[['Date','Type','Merchant','Category','Subcategory','Amount','Currency','Payment Method','Note']];
-  monthTransactions().sort((a,b)=>String(a.date).localeCompare(String(b.date))).forEach(t=>rows.push([t.date,t.type,t.merchant||'',t.category||'',t.subcategory||'',t.amount,APP_CURRENCY,t.payment||'',t.note||'']));
+  monthTransactions().sort((a,b)=>String(a.date).localeCompare(String(b.date))).forEach(t=>rows.push([t.date,t.type,t.merchant||'',t.category||'',t.subcategory||'',t.amount,countryMeta().currency,t.payment||'',t.note||'']));
   const csv=rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
-  downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`rahman-expense-${month}.csv`); toast('CSV exported.');
+  downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`rahman-expense-${country.toLowerCase()}-${month}.csv`); toast('CSV exported.');
 }
 function exportBackup(){
   downloadBlob(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),`rahman-expense-backup-${today()}.json`); toast('Backup exported.');
@@ -1343,7 +1482,7 @@ async function importBackup(e){
     const data=JSON.parse(await file.text());
     if(!Array.isArray(data.transactions)||typeof data.settings!=='object') throw new Error('Invalid backup');
     if(!confirm('Replace current Rahman Expense data with this backup?')) return;
-    state={...defaultState(),...data,settings:{...defaultState().settings,...data.settings,currency:APP_CURRENCY}}; normalizeState(); await saveState(); queueCloudSync(); render(); toast('Backup restored.');
+    state={...defaultState(),...data,settings:{...defaultState().settings,...data.settings}}; normalizeState(); await saveState(); queueCloudSync(); render(); toast('Backup restored.');
   }catch(err){ toast('Could not import that backup file.'); }
 }
 function downloadBlob(blob,name){
