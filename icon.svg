@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Rahman Expense">
+  <rect width="512" height="512" rx="112" fill="#162947"/>
+  <path d="M142 112h129c78 0 125 38 125 103 0 47-25 79-69 94l82 91h-73l-72-82h-58v82h-64V112zm64 56v96h63c42 0 62-16 62-48s-20-48-62-48h-63z" fill="#fff"/>
+  <circle cx="390" cy="120" r="24" fill="#4f73f2"/>
+</svg>

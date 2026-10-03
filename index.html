@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#162947" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Rahman Expense" />
+  <title>Rahman Expense — Personal Expense Manager</title>
+
+  <!-- Rahman Expense deployment metadata. GitHub Pages serves this app from the /rahman-expense/ project path. -->
+  <meta name="application-name" content="Rahman Expense" />
+  <meta name="description" content="Rahman Expense personal expense manager — KWD only, responsive for iPhone and laptop." />
+  <script>
+    window.LEDGERLY_DEPLOYMENT = {
+      app: 'Rahman Expense',
+      version: '1.8',
+      currency: 'KWD',
+      hosting: 'GitHub Pages',
+      projectHint: 'rahman-expense'
+    };
+  </script>
+  <link rel="manifest" href="manifest.webmanifest?v=1.8" />
+  <link rel="icon" href="icon.svg?v=1.8" type="image/svg+xml" />
+  <link rel="stylesheet" href="styles.css?v=1.8" />
+</head>
+<body>
+  <div id="app" class="app-shell" aria-live="polite"></div>
+  <div id="modal-root"></div>
+  <div id="toast-root" aria-live="assertive"></div>
+
+  <script src="cloud-config.js?v=1.8"></script>
+  <script src="app.js?v=1.8" defer></script>
+</body>
+</html>
