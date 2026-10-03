@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.7';
+const APP_VERSION = '1.9';
 const APP_CURRENCY = 'KWD';
 const CURRENCY_DECIMALS = 3;
 const DB_NAME = 'ledgerly-pro-db';
@@ -54,7 +54,9 @@ const defaultState = () => ({
     deletedTransactions: [],
     budgetUpdated: {},
     budgetDeleted: {},
-    profileUpdatedAt: ''
+    profileUpdatedAt: '',
+    remoteBudgetIds: {},
+    remoteMerchantIds: {}
   },
   settings: {
     currency: APP_CURRENCY,
@@ -75,6 +77,10 @@ let pendingReceiptFile = null;
 let modalTxId = null;
 let cloudClient = null;
 let cloudSyncTimer = null;
+let realtimeChannel = null;
+let realtimeUserId = '';
+let realtimeStatus = 'OFF';
+let realtimeApplyTimer = null;
 let cloudStatus = { configured:false, authenticated:false, email:'', lastSync:'', syncing:false, error:'' };
 
 const app = document.getElementById('app');
@@ -116,6 +122,8 @@ function normalizeState(){
   state.syncMeta.deletedTransactions=Array.isArray(state.syncMeta.deletedTransactions)?state.syncMeta.deletedTransactions:[];
   state.syncMeta.budgetUpdated=state.syncMeta.budgetUpdated||{};
   state.syncMeta.budgetDeleted=state.syncMeta.budgetDeleted||{};
+  state.syncMeta.remoteBudgetIds=state.syncMeta.remoteBudgetIds||{};
+  state.syncMeta.remoteMerchantIds=state.syncMeta.remoteMerchantIds||{};
   state.transactions=(state.transactions||[]).map(t=>({
     ...t,
     id:validUuid(t.id)?t.id:uid(),
@@ -126,6 +134,7 @@ function normalizeState(){
 function cloudStateText(){
   if(!cloudStatus.configured) return 'Local only';
   if(cloudStatus.syncing) return 'Syncing…';
+  if(cloudStatus.authenticated && realtimeStatus==='SUBSCRIBED') return 'Connected · Live';
   if(cloudStatus.authenticated) return 'Connected';
   return 'Configured · sign in required';
 }
@@ -137,6 +146,109 @@ function remoteTxToLocal(r){
 function localTxToRemote(t,userId){
   return {id:t.id,user_id:userId,type:t.type,amount:n(t.amount),merchant:t.merchant||null,category:t.category||null,subcategory:t.subcategory||null,txn_date:t.date,payment_method:t.payment||null,note:t.note||null,receipt_retained:false,created_at:t.createdAt||new Date().toISOString(),updated_at:t.updatedAt||new Date().toISOString()};
 }
+
+async function stopRealtime(){
+  clearTimeout(realtimeApplyTimer);
+  realtimeApplyTimer=null;
+  if(realtimeChannel){
+    try{
+      const client=cloudClient || await getCloudClient();
+      await client.removeChannel(realtimeChannel);
+    }catch(e){}
+  }
+  realtimeChannel=null;
+  realtimeUserId='';
+  realtimeStatus='OFF';
+}
+function scheduleRealtimeSave(){
+  clearTimeout(realtimeApplyTimer);
+  realtimeApplyTimer=setTimeout(async()=>{
+    await saveState();
+    cloudStatus.lastSync=new Date().toISOString();
+    render();
+  },180);
+}
+function applyRealtimePayload(table,payload,userId){
+  const event=payload?.eventType||'';
+  const row=payload?.new||{};
+  const old=payload?.old||{};
+  if(table==='transactions'){
+    if(event==='DELETE'){
+      if(old.id) state.transactions=state.transactions.filter(t=>t.id!==old.id);
+    }else if(row.user_id===userId && row.id){
+      const remote=remoteTxToLocal(row);
+      const idx=state.transactions.findIndex(t=>t.id===remote.id);
+      if(idx<0 || new Date(remote.updatedAt||0)>=new Date(state.transactions[idx].updatedAt||0)){
+        if(idx<0) state.transactions.push(remote); else state.transactions[idx]=remote;
+      }
+    }
+  }else if(table==='monthly_budgets'){
+    if(event==='DELETE'){
+      const key=state.syncMeta.remoteBudgetIds?.[old.id];
+      if(key){
+        const [m,cat]=splitBudgetKey(key);
+        if(state.budgets[m]){
+          delete state.budgets[m][cat];
+          if(!Object.keys(state.budgets[m]).length) delete state.budgets[m];
+        }
+        delete state.syncMeta.budgetUpdated[key];
+        delete state.syncMeta.budgetDeleted[key];
+        delete state.syncMeta.remoteBudgetIds[old.id];
+      }
+    }else if(row.user_id===userId && row.id){
+      const m=String(row.budget_month).slice(0,7), key=budgetKey(m,row.category);
+      ensureBudgetMonth(m)[row.category]=n(row.planned_amount);
+      state.syncMeta.budgetUpdated[key]=row.updated_at||new Date().toISOString();
+      delete state.syncMeta.budgetDeleted[key];
+      state.syncMeta.remoteBudgetIds[row.id]=key;
+    }
+  }else if(table==='merchant_rules'){
+    if(event==='DELETE'){
+      const merchantKey=state.syncMeta.remoteMerchantIds?.[old.id];
+      if(merchantKey){
+        delete state.merchantRules[merchantKey];
+        delete state.syncMeta.remoteMerchantIds[old.id];
+      }
+    }else if(row.user_id===userId && row.id){
+      state.merchantRules[row.merchant_key]={category:row.category,subcategory:row.subcategory||''};
+      state.syncMeta.remoteMerchantIds[row.id]=row.merchant_key;
+    }
+  }else if(table==='profiles'){
+    if(event!=='DELETE' && row.id===userId){
+      state.settings.openingBalance=n(row.opening_balance);
+      state.syncMeta.profileUpdatedAt=row.updated_at||new Date().toISOString();
+    }
+  }
+  scheduleRealtimeSave();
+}
+async function startRealtime(){
+  await stopRealtime();
+  await refreshCloudSession();
+  if(!cloudStatus.authenticated || !navigator.onLine) return;
+  try{
+    const client=await getCloudClient();
+    const {data,error}=await client.auth.getUser(); if(error) throw error;
+    const userId=data?.user?.id; if(!userId) return;
+    realtimeUserId=userId;
+    realtimeStatus='CONNECTING';
+    realtimeChannel=client
+      .channel(`rahman-expense-live-${userId}`)
+      .on('postgres_changes',{event:'*',schema:'public',table:'transactions',filter:`user_id=eq.${userId}`},p=>applyRealtimePayload('transactions',p,userId))
+      .on('postgres_changes',{event:'*',schema:'public',table:'monthly_budgets',filter:`user_id=eq.${userId}`},p=>applyRealtimePayload('monthly_budgets',p,userId))
+      .on('postgres_changes',{event:'*',schema:'public',table:'merchant_rules',filter:`user_id=eq.${userId}`},p=>applyRealtimePayload('merchant_rules',p,userId))
+      .on('postgres_changes',{event:'*',schema:'public',table:'profiles',filter:`id=eq.${userId}`},p=>applyRealtimePayload('profiles',p,userId))
+      .subscribe(status=>{
+        realtimeStatus=status;
+        if(status==='CHANNEL_ERROR' || status==='TIMED_OUT') cloudStatus.error='Live sync connection problem. Use Sync now, then check Supabase Realtime settings.';
+        render();
+      });
+  }catch(err){
+    realtimeStatus='ERROR';
+    cloudStatus.error=err?.message||'Could not start live sync.';
+    render();
+  }
+}
+
 async function refreshCloudSession(){
   cloudStatus.configured=cloudConfigured(); cloudStatus.error='';
   if(!cloudStatus.configured){ cloudStatus.authenticated=false; cloudStatus.email=''; return; }
@@ -152,7 +264,7 @@ async function saveCloudSetup(){
   const url=document.getElementById('cloud-url')?.value.trim()||'';
   const anonKey=document.getElementById('cloud-key')?.value.trim()||'';
   const email=document.getElementById('cloud-email')?.value.trim()||'';
-  if(!/^https:\/\//i.test(url)||anonKey.length<20){ toast('Enter a valid Supabase Project URL and anon public key.'); return; }
+  if(!/^https:\/\//i.test(url)||anonKey.length<20){ toast('Enter a valid Supabase Project URL and publishable/anon public key.'); return; }
   saveCloudConfig({url,anonKey,email});
   await refreshCloudSession(); render(); toast('Cloud setup saved on this device.');
 }
@@ -169,6 +281,7 @@ async function sendCloudLogin(){
   }catch(err){ toast(`Could not send sign-in link: ${err?.message||'unknown error'}`); }
 }
 async function cloudSignOut(){
+  await stopRealtime();
   try{ const client=await getCloudClient(); await client.auth.signOut(); }catch(e){}
   cloudStatus.authenticated=false; cloudStatus.email=''; render(); toast('Cloud account signed out on this device.');
 }
@@ -215,6 +328,7 @@ async function syncCloud(silent=false){
 
     for(const r of (budgetRes.data||[])){
       const m=String(r.budget_month).slice(0,7), key=budgetKey(m,r.category);
+      if(r.id) state.syncMeta.remoteBudgetIds[r.id]=key;
       const localTs=state.syncMeta.budgetUpdated[key]||'';
       const delTs=state.syncMeta.budgetDeleted[key]||'';
       const remoteTs=r.updated_at||'';
@@ -228,6 +342,7 @@ async function syncCloud(silent=false){
     }
 
     for(const r of (merchantRes.data||[])){
+      if(r.id) state.syncMeta.remoteMerchantIds[r.id]=r.merchant_key;
       if(!state.merchantRules[r.merchant_key]) state.merchantRules[r.merchant_key]={category:r.category,subcategory:r.subcategory||''};
     }
     const prof=profileRes.data;
@@ -249,7 +364,7 @@ async function syncCloud(silent=false){
     }
     const budgetRows=[];
     Object.entries(state.budgets).forEach(([m,cats])=>Object.entries(cats||{}).forEach(([cat,val])=>budgetRows.push({user_id:userId,budget_month:`${m}-01`,category:cat,planned_amount:n(val),updated_at:state.syncMeta.budgetUpdated[budgetKey(m,cat)]||new Date().toISOString()})));
-    if(budgetRows.length){ const {error}=await client.from('monthly_budgets').upsert(budgetRows,{onConflict:'user_id,budget_month,category'}); if(error) throw error; }
+    if(budgetRows.length){ const {data:budgetUpsertData,error}=await client.from('monthly_budgets').upsert(budgetRows,{onConflict:'user_id,budget_month,category'}).select('id,budget_month,category'); if(error) throw error; for(const r of (budgetUpsertData||[])){state.syncMeta.remoteBudgetIds[r.id]=budgetKey(String(r.budget_month).slice(0,7),r.category);} }
     const deletedBudgetKeys=Object.keys(state.syncMeta.budgetDeleted||{});
     for(const key of deletedBudgetKeys){
       const [m,cat]=splitBudgetKey(key);
@@ -257,7 +372,7 @@ async function syncCloud(silent=false){
       delete state.syncMeta.budgetDeleted[key];
     }
     const merchantRows=Object.entries(state.merchantRules||{}).map(([merchant_key,v])=>({user_id:userId,merchant_key,category:v.category,subcategory:v.subcategory||null}));
-    if(merchantRows.length){ const {error}=await client.from('merchant_rules').upsert(merchantRows,{onConflict:'user_id,merchant_key'}); if(error) throw error; }
+    if(merchantRows.length){ const {data:merchantUpsertData,error}=await client.from('merchant_rules').upsert(merchantRows,{onConflict:'user_id,merchant_key'}).select('id,merchant_key'); if(error) throw error; for(const r of (merchantUpsertData||[])){state.syncMeta.remoteMerchantIds[r.id]=r.merchant_key;} }
     const now=new Date().toISOString();
     const {error:profileError}=await client.from('profiles').upsert({id:userId,display_name:cloudStatus.email||null,currency:APP_CURRENCY,opening_balance:n(state.settings.openingBalance),updated_at:state.syncMeta.profileUpdatedAt||now},{onConflict:'id'}); if(profileError) throw profileError;
 
@@ -271,7 +386,7 @@ async function initCloud(){
   cloudStatus.configured=cloudConfigured();
   if(!cloudStatus.configured) return;
   await refreshCloudSession();
-  if(cloudStatus.authenticated && navigator.onLine) await syncCloud(true);
+  if(cloudStatus.authenticated && navigator.onLine){ await syncCloud(true); await startRealtime(); }
 }
 
 function currentMonth() { return new Date().toISOString().slice(0, 7); }
@@ -591,20 +706,20 @@ function settingsView(){
       </div>
     </div>
     <div class="section card sync-card">
-      <div class="sync-head"><div><h3>Private cross-device sync</h3><p class="subtle" style="margin:4px 0 0">Use one account on iPhone and laptop. GitHub Pages hosts only the app files; your financial records are stored only locally unless you enable this Supabase sync.</p></div><span class="status-pill ${syncClass}">${escapeHtml(cloudStateText())}</span></div>
+      <div class="sync-head"><div><h3>Private real-time cross-device sync</h3><p class="subtle" style="margin:4px 0 0">Use one account on iPhone and laptop. Once Supabase is connected, saved changes can appear automatically on the other open device in real time.</p></div><span class="status-pill ${syncClass}">${escapeHtml(cloudStateText())}</span></div>
       <div class="sync-form">
         <div class="field"><label>Supabase Project URL</label><input class="input" id="cloud-url" value="${escapeHtml(cfg.url)}" placeholder="https://xxxx.supabase.co" /></div>
-        <div class="field"><label>Anon public key</label><input class="input" id="cloud-key" type="password" value="${escapeHtml(cfg.anonKey)}" placeholder="Public anon key only — never service_role" /></div>
+        <div class="field"><label>Publishable / anon public key</label><input class="input" id="cloud-key" type="password" value="${escapeHtml(cfg.anonKey)}" placeholder="Publishable key only — never secret/service_role" /></div>
         <div class="field"><label>Your login email</label><input class="input" id="cloud-email" type="email" value="${escapeHtml(cloudStatus.email||cfg.email)}" placeholder="you@example.com" /></div>
       </div>
       <div class="actions" style="margin-top:14px">
         <button class="btn" data-action="cloud-save">Save cloud setup</button>
         ${cloudStatus.authenticated?`<button class="btn primary" data-action="cloud-sync">Sync now</button><button class="btn soft" data-action="cloud-signout">Sign out</button>`:`<button class="btn primary" data-action="cloud-login">Email me a sign-in link</button>`}
       </div>
-      <div class="sync-meta"><span><b>Account:</b> ${escapeHtml(cloudStatus.email||'Not signed in')}</span><span><b>Last sync:</b> ${escapeHtml(lastSync)}</span>${cloudStatus.error?`<span class="negative"><b>Status:</b> ${escapeHtml(cloudStatus.error)}</span>`:''}</div>
-      <div class="privacy-note"><b>Privacy:</b> the Supabase <i>anon public key</i> is safe for a browser app when Row Level Security is enabled by the included SQL schema. Never paste a Supabase <i>service_role</i> key into Rahman Expense.</div>
+      <div class="sync-meta"><span><b>Account:</b> ${escapeHtml(cloudStatus.email||'Not signed in')}</span><span><b>Last sync:</b> ${escapeHtml(lastSync)}</span><span><b>Live:</b> ${escapeHtml(realtimeStatus==='SUBSCRIBED'?'On':realtimeStatus==='CONNECTING'?'Connecting…':'Off')}</span>${cloudStatus.error?`<span class="negative"><b>Status:</b> ${escapeHtml(cloudStatus.error)}</span>`:''}</div>
+      <div class="privacy-note"><b>Privacy:</b> the Supabase <i>publishable key</i> (or legacy anon key) is appropriate for a browser app when Row Level Security is enabled. Never paste a Supabase <i>secret/service_role</i> key into Rahman Expense.</div>
     </div>`;
-  return shell(content,'Settings','KWD, private backup and optional iPhone ↔ laptop synchronization.');
+  return shell(content,'Settings','KWD, private backup and real-time iPhone ↔ laptop synchronization.');
 }
 
 function render(){
@@ -858,6 +973,8 @@ async function init(){
   render();
   await initCloud();
   render();
+  window.addEventListener('online',()=>{ if(cloudStatus.authenticated) startRealtime(); });
+  window.addEventListener('offline',()=>{ realtimeStatus='OFFLINE'; render(); });
   if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
 }
 init();

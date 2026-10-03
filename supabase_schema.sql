@@ -86,3 +86,48 @@ drop trigger if exists monthly_budgets_set_updated_at on public.monthly_budgets;
 create trigger monthly_budgets_set_updated_at before update on public.monthly_budgets for each row execute function public.ledgerly_set_updated_at();
 drop trigger if exists merchant_rules_set_updated_at on public.merchant_rules;
 create trigger merchant_rules_set_updated_at before update on public.merchant_rules for each row execute function public.ledgerly_set_updated_at();
+
+-- v1.9 REAL-TIME SYNC -------------------------------------------------------
+-- Postgres Changes is disabled for new Supabase projects until tables are
+-- added to the supabase_realtime publication. The app subscribes only to the
+-- signed-in user's rows; RLS remains the primary data-access boundary.
+
+-- Explicit browser privileges: signed-out visitors get no financial-table
+-- access; authenticated users may operate only on rows allowed by RLS.
+revoke all on table public.profiles from anon;
+revoke all on table public.transactions from anon;
+revoke all on table public.monthly_budgets from anon;
+revoke all on table public.merchant_rules from anon;
+
+grant select, insert, update, delete on table public.profiles to authenticated;
+grant select, insert, update, delete on table public.transactions to authenticated;
+grant select, insert, update, delete on table public.monthly_budgets to authenticated;
+grant select, insert, update, delete on table public.merchant_rules to authenticated;
+
+-- Required so filtered DELETE events can be matched by Realtime. With RLS,
+-- clients still receive only the primary key in payload.old for deletes.
+alter table public.transactions replica identity full;
+alter table public.monthly_budgets replica identity full;
+alter table public.merchant_rules replica identity full;
+alter table public.profiles replica identity full;
+
+-- Idempotently enable Postgres Changes for Rahman Expense tables.
+do $$
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    execute 'create publication supabase_realtime';
+  end if;
+
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='transactions') then
+    execute 'alter publication supabase_realtime add table public.transactions';
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='monthly_budgets') then
+    execute 'alter publication supabase_realtime add table public.monthly_budgets';
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='merchant_rules') then
+    execute 'alter publication supabase_realtime add table public.merchant_rules';
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='profiles') then
+    execute 'alter publication supabase_realtime add table public.profiles';
+  end if;
+end $$;

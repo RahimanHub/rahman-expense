@@ -1,38 +1,36 @@
-# Rahman Expense v1.8 — GitHub Pages Ready (KWD)
+# Rahman Expense v1.9 — Real-Time Sync (KWD)
 
-This build is prepared specifically for the GitHub repository **rahman-expense** and GitHub Pages. It is responsive for iPhone and laptop, KWD-only, local-first, and includes optional private Supabase sync.
+This build is prepared for the GitHub repository **rahman-expense** and GitHub Pages. It is responsive for iPhone and laptop, KWD-only, local-first, and supports optional **real-time Supabase synchronization**.
 
-## Upload to GitHub
+## What v1.9 adds
 
-Upload the **contents of this folder** to the root of your `rahman-expense` repository. The repository root should contain `index.html`, `app.js`, `styles.css`, `service-worker.js`, `manifest.webmanifest`, `icon.svg`, `cloud-config.js`, `supabase_schema.sql`, `README.md`, and `VERSION.txt`.
+When the same Supabase account is signed in on both devices, changes to transactions, monthly budgets, merchant rules and opening balance can appear automatically on the other open device within seconds. A manual **Sync now** button remains available as a fallback. Receipt photos are never synchronized.
 
-Do not upload the outer folder as a nested folder inside the repository. `index.html` must be visible at the repository root.
+## Update GitHub
 
-## Enable GitHub Pages
+Upload the contents of this folder to the root of your `rahman-expense` repository and replace the existing v1.8 files. `index.html` must remain at repository root. GitHub Pages should stay configured as **main → / (root)**.
 
-1. Open the `rahman-expense` repository.
-2. Go to **Settings → Pages**.
-3. Under **Build and deployment**, choose **Deploy from a branch**.
-4. Branch: **main**. Folder: **/ (root)**.
-5. Click **Save**.
-6. Wait for GitHub to publish the site.
+## Supabase setup
 
-Your address will normally be:
+1. Create a Supabase project.
+2. Open **SQL Editor** and run the complete `supabase_schema.sql` from this package. The v1.9 section enables Realtime publication for the required tables and keeps RLS enabled.
+3. In Supabase Authentication, enable email sign-in and set the Site URL / redirect URL to your GitHub Pages address, for example `https://rahimanhub.github.io/rahman-expense/`.
+4. In Rahman Expense → **Settings**, enter your Supabase Project URL and **publishable/anon public key**. Never enter a service-role/secret key.
+5. Enter your email and tap **Email me a sign-in link**. Sign in on both iPhone and laptop with the same account.
+6. The Settings status should show **Connected · Live** and **Live: On**.
 
-`https://<your-github-username>.github.io/rahman-expense/`
+## Test real-time sync
 
-## iPhone
+Keep Rahman Expense open on laptop and iPhone. Add a small test expense on one device. After cloud save completes, the other open device should update automatically. Also test editing and deleting a transaction and changing a monthly budget.
 
-Open the GitHub Pages address in Safari, tap **Share → Add to Home Screen**. The PWA uses relative paths so it works correctly under the `/rahman-expense/` GitHub Pages subfolder.
+## Privacy
 
-## Privacy and sync
+- GitHub Pages hosts only the app code.
+- Financial records stay local unless Supabase sync is enabled.
+- Supabase Row Level Security restricts each signed-in user to their own rows.
+- Receipt photos remain temporary and are not uploaded by Rahman Expense.
+- Keep the Supabase service-role/secret key out of GitHub and out of the browser app.
 
-- By default, financial data stays in browser storage on that device.
-- Receipt photos are temporary and are not included in cloud sync.
-- Optional Supabase sync can synchronize confirmed transactions, budgets, merchant rules and profile data between iPhone and laptop.
-- Use only the Supabase Project URL and **anon/publishable key**. Never place a `service_role` key in this project.
-- `supabase_schema.sql` enables Row Level Security for per-user data.
+## Backup
 
-## Google Drive backup
-
-Use **Export backup** on laptop or **Share backup** on iPhone and save the JSON file to Google Drive. Google Drive is a backup location, not the live database.
+Use **Export backup** on laptop or **Share backup** on iPhone and save the JSON file to Google Drive if desired.
