@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3';
 const APP_CURRENCY = 'KWD';
 const CURRENCY_DECIMALS = 3;
 const DB_NAME = 'rahman-expense-v2-db';
@@ -1003,7 +1003,7 @@ async function init(){
   render();
   window.addEventListener('online',()=>{ if(cloudStatus.authenticated) startRealtime(); });
   window.addEventListener('offline',()=>{ realtimeStatus='OFFLINE'; render(); });
-  // v2.2 deliberately runs without a service worker so GitHub Pages updates are immediate.
+  // v2.3 deliberately runs without a service worker so GitHub Pages updates are immediate.
   // Remove only legacy app caches/service workers; keep IndexedDB/localStorage expense data intact.
   try {
     if ('serviceWorker' in navigator) {

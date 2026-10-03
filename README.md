@@ -1,4 +1,4 @@
-# Rahman Expense v2.2 — Simple Password Login + Real-Time Sync (KWD)
+# Rahman Expense v2.3 — Simple Password Login + Real-Time Sync (KWD)
 
 This release removes the Supabase magic-link dependency from Rahman Expense. It uses normal **email + password** sign-in, so there is no localhost redirect and no authentication link to open from email.
 
@@ -7,9 +7,9 @@ Upload all files in this folder to the `RahimanHub/rahman-expense` GitHub reposi
 
 Open:
 
-`https://rahimanhub.github.io/rahman-expense/?v=2.1`
+`https://rahimanhub.github.io/rahman-expense/?v=2.3`
 
-The sidebar should show **KWD only · v2.2**.
+The sidebar should show **KWD only · v2.3**.
 
 ## Supabase one-time setup
 1. Keep the existing `supabase_schema.sql` already run in the project.
@@ -35,3 +35,7 @@ When connected, Settings should show **Connected · Live** and **Live: On**.
 
 ## Security
 Never put a Supabase secret or `service_role` key in this browser app. Only use the publishable/anon key with Row Level Security enabled.
+
+
+## v2.3 fix
+The v2.2 index accidentally referenced v2.1 asset URLs. v2.3 corrects all asset query versions to `?v=2.3`, so the browser loads the matching JavaScript/CSS immediately.
