@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.9';
+const APP_VERSION = '2.10';
 const COUNTRIES = {
   KW: { name: 'Kuwait', flag: '🇰🇼', currency: 'KWD', decimals: 3 },
   IN: { name: 'India', flag: '🇮🇳', currency: 'INR', decimals: 2 }
@@ -8,6 +8,7 @@ const COUNTRIES = {
 const DB_NAME = 'rahman-expense-v2-db';
 const DB_STORE = 'kv';
 const STATE_KEY = 'rahman_expense_state_v2';
+let stateSaveTimer = null;
 const CLOUD_CONFIG_KEY = 'rahman_expense_cloud_config_v2';
 
 // The same category structure is used for Kuwait and India.
@@ -596,7 +597,21 @@ async function dbSet(key,value){
     });
   }catch(e){ localStorage.setItem(key,JSON.stringify(value)); }
 }
-async function saveState(){ state.settings.activeCountry=country; await dbSet(STATE_KEY,state); }
+function saveStateShadow(){
+  state.settings.activeCountry=country;
+  state._savedAt=new Date().toISOString();
+  try{ localStorage.setItem(STATE_KEY,JSON.stringify(state)); }catch(e){}
+}
+async function saveState(){
+  saveStateShadow();
+  await dbSet(STATE_KEY,state);
+}
+function scheduleStateSave(delay=180){
+  // Keep a synchronous shadow copy first so an immediate browser refresh cannot lose edits.
+  saveStateShadow();
+  clearTimeout(stateSaveTimer);
+  stateSaveTimer=setTimeout(()=>{ saveState().catch(()=>{}); },delay);
+}
 
 function migrateLegacy(legacy){
   if(!legacy || !Array.isArray(legacy.tx)) return null;
@@ -626,7 +641,12 @@ function migrateLegacy(legacy){
 }
 
 async function loadState(){
-  const saved=await dbGet(STATE_KEY);
+  const savedDb=await dbGet(STATE_KEY);
+  let savedLocal=null;
+  try{ savedLocal=JSON.parse(localStorage.getItem(STATE_KEY)||'null'); }catch(e){}
+  const dbTs=Date.parse(savedDb?._savedAt||'')||0;
+  const localTs=Date.parse(savedLocal?._savedAt||'')||0;
+  const saved=(savedLocal && Array.isArray(savedLocal.transactions) && localTs>=dbTs)?savedLocal:savedDb;
   if(saved && Array.isArray(saved.transactions)) {
     state={...defaultState(),...saved,settings:{...defaultState().settings,...saved.settings}};
   } else {
@@ -903,9 +923,29 @@ function bindView(){
   const tt=document.getElementById('tx-type'); if(tt) tt.addEventListener('change',e=>{txFilter.type=e.target.value;render()});
   const tc=document.getElementById('tx-cat'); if(tc) tc.addEventListener('change',e=>{txFilter.category=e.target.value;render()});
 
-  document.querySelectorAll('[data-budget-cat]').forEach(input=>input.addEventListener('change',async e=>{
-    const bud=ensureBudgetMonth(); const cat=e.target.dataset.budgetCat; const val=Math.max(0,n(e.target.value)); if(val){ bud[cat]=val; markBudgetDirty(month,cat,false); } else { delete bud[cat]; markBudgetDirty(month,cat,true); } await saveState(); queueCloudSync(); render();
-  }));
+  document.querySelectorAll('[data-budget-cat]').forEach(input=>{
+    const applyBudgetValue=()=>{
+      const bud=ensureBudgetMonth();
+      const cat=input.dataset.budgetCat;
+      const val=Math.max(0,n(input.value));
+      if(val){ bud[cat]=val; markBudgetDirty(month,cat,false); }
+      else { delete bud[cat]; markBudgetDirty(month,cat,true); }
+    };
+    input.addEventListener('input',()=>{
+      // Save while the user is typing. This fixes budgets disappearing when Refresh is pressed
+      // before the field loses focus and the old `change` event had a chance to fire.
+      applyBudgetValue();
+      scheduleStateSave(120);
+      queueCloudSync();
+    });
+    input.addEventListener('change',async()=>{
+      applyBudgetValue();
+      await saveState();
+      queueCloudSync();
+      render();
+    });
+    input.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); input.blur(); } });
+  });
   document.querySelectorAll('[data-action="copy-budget"]').forEach(el=>el.addEventListener('click',copyPreviousBudget));
   document.querySelectorAll('[data-action="clear-budget"]').forEach(el=>el.addEventListener('click',clearBudget));
   document.querySelectorAll('[data-action="export-csv"]').forEach(el=>el.addEventListener('click',exportCsv));
@@ -1508,6 +1548,9 @@ async function init(){
   render();
   window.addEventListener('online',()=>{ if(cloudStatus.authenticated) startRealtime(); });
   window.addEventListener('offline',()=>{ realtimeStatus='OFFLINE'; render(); });
+  // Preserve the latest in-form values even if the user refreshes/closes the page immediately.
+  window.addEventListener('pagehide',saveStateShadow);
+  document.addEventListener('visibilitychange',()=>{ if(document.hidden) saveStateShadow(); });
   // v2.6 deliberately runs without a service worker so GitHub Pages updates are immediate.
   // Remove only legacy app caches/service workers; keep IndexedDB/localStorage expense data intact.
   try {
