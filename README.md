@@ -1,41 +1,36 @@
-# Rahman Expense v2.3 — Simple Password Login + Real-Time Sync (KWD)
+# Rahman Expense v2.4 — Mobile Professional + Simple Login + Real-Time Sync (KWD)
 
-This release removes the Supabase magic-link dependency from Rahman Expense. It uses normal **email + password** sign-in, so there is no localhost redirect and no authentication link to open from email.
+Rahman Expense is a KWD-only personal expense manager for iPhone and laptop. This release keeps the working Supabase email/password sync and improves mobile identity, drill-down navigation, and receipt camera handling.
 
-## Upgrade
-Upload all files in this folder to the `RahimanHub/rahman-expense` GitHub repository and replace the existing v2.0 files. GitHub Pages remains `main` + `/ (root)`.
+## Upgrade on GitHub Pages
+Upload all files in this folder to the `RahimanHub/rahman-expense` GitHub repository and replace the existing files. GitHub Pages remains `main` + `/ (root)`.
 
-Open:
+After deployment, check:
 
-`https://rahimanhub.github.io/rahman-expense/?v=2.3`
+`https://rahimanhub.github.io/rahman-expense/VERSION.txt`
 
-The sidebar should show **KWD only · v2.3**.
+It should show **v2.4**.
 
-## Supabase one-time setup
-1. Keep the existing `supabase_schema.sql` already run in the project.
-2. In Supabase, open **Authentication → Providers → Email** (wording may vary).
-3. Keep Email authentication enabled.
-4. Turn **Confirm email** / **Email confirmations** OFF for this personal app. With confirmation disabled, Supabase returns a session immediately after signup instead of sending a confirmation link.
-5. If the same email was already created by the old magic-link tests and has no password, delete that test user once from **Authentication → Users** before creating the account in Rahman Expense.
+Then open once:
 
-## Rahman Expense settings
-Enter:
-- Supabase Project URL
-- Publishable key (`sb_publishable_...`)
-- Your email
-- A strong password (8+ characters)
+`https://rahimanhub.github.io/rahman-expense/refresh.html`
 
-Click **Save cloud setup**.
+This clears only legacy app caches and keeps local expense data intact.
 
-On the first device click **Create account** once. On the second device click **Sign in** using the same email and password.
+## v2.4 improvements
+- Mobile now shows **Rahman Expense**, **KWD only**, the app version, and **Developed by Rahiman**.
+- Desktop sidebar and Settings also show **Developed by Rahiman**.
+- Dashboard **Income** opens Income transactions.
+- Dashboard **Expenses** opens Expense transactions.
+- Dashboard **Budget left** opens Monthly Budget.
+- Report metric cards drill down to the matching Transactions or Budget page.
+- Budget **Actual spending** opens expense transactions.
+- Mobile **Scan receipt** attempts to open the rear-camera picker directly.
+- Receipt editor has explicit **Take photo** and **Choose image** buttons for better iPhone compatibility.
+- Receipt images remain temporary and are not stored in cloud sync.
 
-The password is never saved in Rahman Expense. Supabase stores the authenticated session in the browser so you normally stay signed in.
-
-When connected, Settings should show **Connected · Live** and **Live: On**.
+## Supabase sync
+Use the same Supabase Project URL, publishable key, email, and password on iPhone and laptop. When connected, Settings should show **Connected · Live** and **Live: On**.
 
 ## Security
-Never put a Supabase secret or `service_role` key in this browser app. Only use the publishable/anon key with Row Level Security enabled.
-
-
-## v2.3 fix
-The v2.2 index accidentally referenced v2.1 asset URLs. v2.3 corrects all asset query versions to `?v=2.3`, so the browser loads the matching JavaScript/CSS immediately.
+Never put a Supabase secret or `service_role` key in the browser app. Use only the publishable/anon key with Row Level Security enabled.

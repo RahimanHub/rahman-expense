@@ -367,3 +367,77 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .sync-meta { display:flex; flex-wrap:wrap; gap:10px 22px; margin-top:14px; padding-top:13px; border-top:1px solid var(--border); color:var(--muted); font-size:11px; }
 .privacy-note { margin-top:14px; padding:11px 12px; border-radius:11px; background:#f6f8fb; color:#65738a; font-size:11px; line-height:1.5; }
 @media (max-width: 800px) { .sync-form { grid-template-columns:1fr; } .sync-head { flex-direction:column; } }
+
+
+/* Rahman Expense v2.4 — mobile identity, drill-down cards, and camera reliability */
+.mobile-brandbar, .mobile-app-footer { display:none; }
+.summary-link, .metric-card-link {
+  appearance:none;
+  width:100%;
+  color:inherit;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
+  position:relative;
+}
+.summary-link { padding-right:42px; }
+.summary-link .card-arrow {
+  position:absolute;
+  right:17px;
+  top:50%;
+  transform:translateY(-50%);
+  color:#94a3b8;
+  font-size:26px;
+  font-weight:500;
+}
+.metric-card-link { border:1px solid var(--border); }
+.summary-link:active, .metric-card-link:active { transform:translateY(1px); }
+.about-card .about-line { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:9px 0; border-bottom:1px solid #edf1f5; }
+.about-card .about-line:last-child { border-bottom:0; }
+.about-card .about-line span { color:var(--muted); }
+.visually-hidden-file { position:fixed !important; left:-9999px !important; width:1px !important; height:1px !important; opacity:0 !important; pointer-events:none !important; }
+.sidebar-footer span { color:#b7c6dc; }
+
+@media (max-width:1050px) {
+  .mobile-brandbar {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin:0 0 16px;
+    padding:10px 12px;
+    border:1px solid #dde5f0;
+    border-radius:14px;
+    background:linear-gradient(135deg,#132947,#1b416f);
+    color:#fff;
+    box-shadow:0 8px 24px rgba(23,43,72,.08);
+  }
+  .mobile-brandmark {
+    width:38px;
+    height:38px;
+    border-radius:11px;
+    display:grid;
+    place-items:center;
+    flex:0 0 auto;
+    background:linear-gradient(145deg,#5f80ff,#315fe8);
+    font-weight:850;
+    font-size:18px;
+  }
+  .mobile-brandcopy { min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .mobile-brandcopy strong { font-size:16px; line-height:1.1; }
+  .mobile-brandcopy span { color:#b9c9e1; font-size:10px; line-height:1.35; white-space:normal; }
+  .mobile-app-footer {
+    display:block;
+    text-align:center;
+    color:#8b98ad;
+    font-size:10px;
+    line-height:1.5;
+    padding:22px 10px 12px;
+  }
+  .mobile-app-footer span { color:#728198; }
+}
+
+@media (max-width:720px) {
+  .mobile-brandbar { margin-bottom:13px; }
+  .summary-link .card-arrow { right:14px; }
+  .summary-link { min-height:112px; }
+}

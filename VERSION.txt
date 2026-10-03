@@ -1,1 +1,1 @@
-Rahman Expense v2.3 — Fixed Asset Versioning + Cache-Free Simple Login + Real-Time Sync KWD — GitHub Pages Ready
+Rahman Expense v2.4 — Mobile Identity + Drill-Down Cards + Camera Fix + Real-Time Sync KWD — GitHub Pages Ready

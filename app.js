@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.3';
+const APP_VERSION = '2.4';
 const APP_CURRENCY = 'KWD';
 const CURRENCY_DECIMALS = 3;
 const DB_NAME = 'rahman-expense-v2-db';
@@ -538,11 +538,16 @@ function shell(content,title,subtitle='',actions=''){
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">R</div><div><h1>Rahman Expense</h1><p>Personal expenses</p></div></div>
       ${navHtml(false)}
-      <div class="sidebar-footer">Private expense tracking<br><b>KWD only</b> · v${APP_VERSION}</div>
+      <div class="sidebar-footer">Private expense tracking<br><b>KWD only</b> · v${APP_VERSION}<br><span>Developed by Rahiman</span></div>
     </aside>
     <main class="main">
+      <div class="mobile-brandbar" aria-label="Rahman Expense app information">
+        <div class="mobile-brandmark">R</div>
+        <div class="mobile-brandcopy"><strong>Rahman Expense</strong><span>KWD only · v${APP_VERSION} · Developed by Rahiman</span></div>
+      </div>
       <div class="topbar"><div><h2>${escapeHtml(title)}</h2>${subtitle?`<div class="subtle">${escapeHtml(subtitle)}</div>`:''}</div><div class="actions">${actions}</div></div>
       ${content}
+      <div class="mobile-app-footer">Rahman Expense · KWD only · v${APP_VERSION}<br><span>Developed by Rahiman</span></div>
     </main>
     ${navHtml(true)}
   </div>`;
@@ -583,9 +588,9 @@ function dashboardView(){
     </section>
 
     <div class="summary-grid">
-      <div class="summary-card"><div class="summary-icon income">↓</div><div><div class="metric-label">Income</div><div class="summary-value positive">${money(income)}</div><div class="summary-note">This month</div></div></div>
-      <div class="summary-card"><div class="summary-icon expense">↑</div><div><div class="metric-label">Expenses</div><div class="summary-value negative">${money(spent)}</div><div class="summary-note">${tx.filter(t=>t.type==='expense').length} transactions</div></div></div>
-      <div class="summary-card"><div class="summary-icon budget">◎</div><div><div class="metric-label">Budget left</div><div class="summary-value ${remaining<0?'negative':''}">${budget?money(remaining):'—'}</div><div class="summary-note">${budget?`${money(budget)} planned`:'Set monthly budget'}</div></div></div>
+      <button class="summary-card summary-link" type="button" data-summary-link="income" aria-label="Open income transactions"><div class="summary-icon income">↓</div><div><div class="metric-label">Income</div><div class="summary-value positive">${money(income)}</div><div class="summary-note">This month · tap to view</div></div><span class="card-arrow">›</span></button>
+      <button class="summary-card summary-link" type="button" data-summary-link="expense" aria-label="Open expense transactions"><div class="summary-icon expense">↑</div><div><div class="metric-label">Expenses</div><div class="summary-value negative">${money(spent)}</div><div class="summary-note">${tx.filter(t=>t.type==='expense').length} transactions · tap to view</div></div><span class="card-arrow">›</span></button>
+      <button class="summary-card summary-link" type="button" data-summary-link="budget" aria-label="Open monthly budgets"><div class="summary-icon budget">◎</div><div><div class="metric-label">Budget left</div><div class="summary-value ${remaining<0?'negative':''}">${budget?money(remaining):'—'}</div><div class="summary-note">${budget?`${money(budget)} planned`:'Set monthly budget'} · tap to manage</div></div><span class="card-arrow">›</span></button>
     </div>
 
     <div class="section grid two dashboard-panels">
@@ -666,10 +671,10 @@ function budgetsView(){
   const content=`
     <div class="section-head"><div>${monthSwitchHtml()}</div><div class="actions"><button class="btn" data-action="copy-budget">Copy previous month</button><button class="btn soft" data-action="clear-budget">Clear month</button></div></div>
     <div class="grid stats">
-      <div class="card"><div class="metric-label">Planned budget</div><div class="metric">${money(total)}</div></div>
-      <div class="card"><div class="metric-label">Actual spending</div><div class="metric negative">${money(spent)}</div></div>
-      <div class="card"><div class="metric-label">Remaining</div><div class="metric ${remaining<0?'negative':'positive'}">${total?money(remaining):'—'}</div></div>
-      <div class="card"><div class="metric-label">Budget used</div><div class="metric">${total?`${Math.round(spent/total*100)}%`:'—'}</div></div>
+      <button class="card metric-card-link" type="button" data-metric-link="budget"><div class="metric-label">Planned budget</div><div class="metric">${money(total)}</div><div class="metric-note">Tap to manage</div></button>
+      <button class="card metric-card-link" type="button" data-metric-link="expense"><div class="metric-label">Actual spending</div><div class="metric negative">${money(spent)}</div><div class="metric-note">Tap to view expenses</div></button>
+      <button class="card metric-card-link" type="button" data-metric-link="budget"><div class="metric-label">Remaining</div><div class="metric ${remaining<0?'negative':'positive'}">${total?money(remaining):'—'}</div><div class="metric-note">Tap to manage</div></button>
+      <button class="card metric-card-link" type="button" data-metric-link="budget"><div class="metric-label">Budget used</div><div class="metric">${total?`${Math.round(spent/total*100)}%`:'—'}</div><div class="metric-note">Tap to manage</div></button>
     </div>
     <div class="section card">
       <div class="section-head"><h3>Category budgets</h3><div class="subtle">Changes save automatically</div></div>
@@ -696,10 +701,10 @@ function reportsView(){
   const content=`
     <div class="section-head"><div>${monthSwitchHtml()}</div><div class="actions"><button class="btn" data-action="export-csv">Export CSV</button><button class="btn primary" data-action="print-report">Print / PDF</button></div></div>
     <div class="grid stats">
-      <div class="card"><div class="metric-label">Income</div><div class="metric positive">${money(income)}</div></div>
-      <div class="card"><div class="metric-label">Expenses</div><div class="metric negative">${money(spent)}</div></div>
-      <div class="card"><div class="metric-label">Net savings</div><div class="metric ${saving>=0?'positive':'negative'}">${money(saving)}</div></div>
-      <div class="card"><div class="metric-label">Budget variance</div><div class="metric ${budget-spent>=0?'positive':'negative'}">${budget?money(budget-spent):'—'}</div></div>
+      <button class="card metric-card-link" type="button" data-metric-link="income"><div class="metric-label">Income</div><div class="metric positive">${money(income)}</div><div class="metric-note">Tap to view income</div></button>
+      <button class="card metric-card-link" type="button" data-metric-link="expense"><div class="metric-label">Expenses</div><div class="metric negative">${money(spent)}</div><div class="metric-note">Tap to view expenses</div></button>
+      <button class="card metric-card-link" type="button" data-metric-link="transactions"><div class="metric-label">Net savings</div><div class="metric ${saving>=0?'positive':'negative'}">${money(saving)}</div><div class="metric-note">Tap to view transactions</div></button>
+      <button class="card metric-card-link" type="button" data-metric-link="budget"><div class="metric-label">Budget variance</div><div class="metric ${budget-spent>=0?'positive':'negative'}">${budget?money(budget-spent):'—'}</div><div class="metric-note">Tap to manage budget</div></button>
     </div>
     <div class="section grid two">
       <div class="card"><h3>Spending by category</h3>${byCat.length?`<div class="donut-wrap"><div class="donut" style="background:conic-gradient(${gradient})"><div class="donut-center"><b>${money(spent)}</b><small>Total spent</small></div></div><div class="legend">${byCat.slice(0,9).map(x=>`<div class="legend-row"><span class="legend-dot" style="background:${PALETTE[x.idx%PALETTE.length]}"></span><span class="legend-name">${escapeHtml(x.cat)}</span><span class="legend-val">${money(x.v)}</span></div>`).join('')}</div></div>`:'<div class="empty">No expense data for this month.</div>'}</div>
@@ -730,6 +735,12 @@ function settingsView(){
         <p class="subtle">Export a private JSON backup. On iPhone, “Share backup” opens the share sheet so you can choose Google Drive if installed.</p>
         <div class="actions"><button class="btn" data-action="backup-export">Export backup</button><button class="btn" data-action="backup-share">Share backup</button><label class="btn soft">Import backup<input type="file" accept="application/json" id="backup-import" hidden /></label></div>
       </div>
+      <div class="card about-card"><h3>About Rahman Expense</h3>
+        <div class="about-line"><span>Application</span><b>Rahman Expense</b></div>
+        <div class="about-line"><span>Version</span><b>v${APP_VERSION}</b></div>
+        <div class="about-line"><span>Currency</span><b>KWD only</b></div>
+        <div class="about-line"><span>Developer</span><b>Rahiman</b></div>
+      </div>
     </div>
     <div class="section card sync-card">
       <div class="sync-head"><div><h3>Private real-time cross-device sync</h3><p class="subtle" style="margin:4px 0 0">Use one account on iPhone and laptop. Once Supabase is connected, saved changes can appear automatically on the other open device in real time.</p></div><span class="status-pill ${syncClass}">${escapeHtml(cloudStateText())}</span></div>
@@ -759,9 +770,12 @@ function bindView(){
   document.querySelectorAll('[data-nav]').forEach(el=>el.addEventListener('click',()=>{view=el.dataset.nav;render()}));
   document.querySelectorAll('[data-month-shift]').forEach(el=>el.addEventListener('click',()=>shiftMonth(Number(el.dataset.monthShift))));
   document.querySelectorAll('[data-action="add"]').forEach(el=>el.addEventListener('click',()=>openTransactionModal()));
-  document.querySelectorAll('[data-action="scan"]').forEach(el=>el.addEventListener('click',()=>openTransactionModal(null,true)));
+  document.querySelectorAll('[data-action="scan"]').forEach(el=>el.addEventListener('click',quickScanReceipt));
   document.querySelectorAll('[data-edit-tx]').forEach(el=>el.addEventListener('click',ev=>{ev.stopPropagation();openTransactionModal(el.dataset.editTx)}));
   document.querySelectorAll('[data-open-tx]').forEach(el=>el.addEventListener('click',()=>openTransactionModal(el.dataset.openTx)));
+  document.querySelectorAll('[data-summary-link]').forEach(el=>el.addEventListener('click',()=>openLinkedSection(el.dataset.summaryLink)));
+  document.querySelectorAll('[data-metric-link]').forEach(el=>el.addEventListener('click',()=>openLinkedSection(el.dataset.metricLink)));
+  document.querySelectorAll('[data-category-transactions]').forEach(el=>el.addEventListener('click',()=>openLinkedSection('category',el.dataset.categoryTransactions)));
 
   const search=document.getElementById('tx-search'); if(search) search.addEventListener('input',e=>{txFilter.search=e.target.value;render()});
   const tt=document.getElementById('tx-type'); if(tt) tt.addEventListener('change',e=>{txFilter.type=e.target.value;render()});
@@ -786,6 +800,52 @@ function bindView(){
   const delRec=document.getElementById('set-delete-receipt'); if(delRec) delRec.addEventListener('change',async e=>{state.settings.deleteReceiptAfterSave=e.target.checked;await saveState();});
   document.querySelectorAll('[data-setting]').forEach(el=>el.addEventListener('change',async e=>{state.settings[e.target.dataset.setting]=e.target.checked;await saveState();}));
   const imp=document.getElementById('backup-import'); if(imp) imp.addEventListener('change',importBackup);
+}
+
+function openLinkedSection(target,category=''){
+  if(target==='income' || target==='expense' || target==='transactions'){
+    txFilter.search='';
+    txFilter.category='all';
+    txFilter.type=target==='transactions'?'all':target;
+    view='transactions';
+  }else if(target==='category'){
+    txFilter.search=''; txFilter.type='expense'; txFilter.category=category||'all'; view='transactions';
+  }else if(target==='budget'){
+    view='budgets';
+  }else if(target==='reports'){
+    view='reports';
+  }else{
+    view='dashboard';
+  }
+  render();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function isPhoneLike(){
+  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints>1 && window.innerWidth<900);
+}
+
+function quickScanReceipt(){
+  if(!isPhoneLike()) { openTransactionModal(null,true); return; }
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='image/*';
+  input.setAttribute('capture','environment');
+  input.setAttribute('aria-label','Take receipt photo');
+  input.style.position='fixed'; input.style.left='-9999px'; input.style.width='1px'; input.style.height='1px'; input.style.opacity='0';
+  document.body.appendChild(input);
+  let finished=false;
+  const cleanup=()=>{ if(!finished){ finished=true; input.remove(); } };
+  input.addEventListener('change',async()=>{
+    const file=input.files?.[0];
+    cleanup();
+    if(!file) return;
+    openTransactionModal(null,true);
+    await scanReceipt(file);
+  },{once:true});
+  try{ input.click(); }
+  catch(_){ cleanup(); openTransactionModal(null,true); toast('Camera picker could not open automatically. Tap Take photo inside the scanner.'); }
+  setTimeout(()=>{ if(document.body.contains(input) && document.visibilityState==='visible') cleanup(); },120000);
 }
 
 function openTransactionModal(id=null,scan=false){
@@ -827,7 +887,7 @@ function openTransactionModal(id=null,scan=false){
 
 function receiptScannerHtml(){
   return `<div class="scan-box" style="margin-top:16px">
-    <div class="scan-preview"><div id="receipt-image"><div style="width:110px;height:110px;border-radius:12px;background:var(--panel-soft);display:grid;place-items:center;font-size:34px">🧾</div></div><div><strong>Smart receipt scan</strong><div class="scan-status" id="scan-status">Take a photo or choose an invoice. Rahman Expense will read the total, merchant, date and suggest a category.</div><div class="actions" style="margin-top:10px"><label class="btn soft">📷 Take photo<input id="receipt-file-camera" type="file" accept="image/*" capture="environment" hidden /></label><label class="btn">Choose image<input id="receipt-file" type="file" accept="image/*" hidden /></label></div></div></div>
+    <div class="scan-preview"><div id="receipt-image"><div style="width:110px;height:110px;border-radius:12px;background:var(--panel-soft);display:grid;place-items:center;font-size:34px">🧾</div></div><div><strong>Smart receipt scan</strong><div class="scan-status" id="scan-status">Take a photo or choose an invoice. Rahman Expense will read the total, merchant, date and suggest a category.</div><div class="actions" style="margin-top:10px"><button class="btn soft" type="button" id="receipt-camera-btn">📷 Take photo</button><button class="btn" type="button" id="receipt-gallery-btn">Choose image</button><input id="receipt-file-camera" type="file" accept="image/*" capture="environment" class="visually-hidden-file" /><input id="receipt-file" type="file" accept="image/*" class="visually-hidden-file" /></div></div></div>
   </div>`;
 }
 
@@ -872,8 +932,18 @@ async function deleteTransaction(id){
 }
 
 function bindScanner(){
-  ['receipt-file-camera','receipt-file'].forEach(id=>{
-    const el=document.getElementById(id); if(el) el.addEventListener('change',async e=>{const f=e.target.files?.[0]; if(f) await scanReceipt(f);});
+  const camera=document.getElementById('receipt-file-camera');
+  const gallery=document.getElementById('receipt-file');
+  const cameraBtn=document.getElementById('receipt-camera-btn');
+  const galleryBtn=document.getElementById('receipt-gallery-btn');
+  if(cameraBtn&&camera) cameraBtn.addEventListener('click',()=>camera.click());
+  if(galleryBtn&&gallery) galleryBtn.addEventListener('click',()=>gallery.click());
+  [camera,gallery].forEach(el=>{
+    if(el) el.addEventListener('change',async e=>{
+      const f=e.target.files?.[0];
+      if(f) await scanReceipt(f);
+      e.target.value='';
+    });
   });
 }
 
@@ -1003,7 +1073,7 @@ async function init(){
   render();
   window.addEventListener('online',()=>{ if(cloudStatus.authenticated) startRealtime(); });
   window.addEventListener('offline',()=>{ realtimeStatus='OFFLINE'; render(); });
-  // v2.3 deliberately runs without a service worker so GitHub Pages updates are immediate.
+  // v2.4 deliberately runs without a service worker so GitHub Pages updates are immediate.
   // Remove only legacy app caches/service workers; keep IndexedDB/localStorage expense data intact.
   try {
     if ('serviceWorker' in navigator) {
