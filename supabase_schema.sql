@@ -1,4 +1,4 @@
--- Rahman Expense v2.12 cloud schema / migration
+-- Rahman Expense v2.14 cloud schema / migration
 -- Kuwait (KWD) and India (INR) are stored separately under one private account.
 -- Safe to run again in Supabase SQL Editor after earlier Rahman Expense versions.
 
@@ -38,6 +38,14 @@ do $$ begin
 end $$;
 create index if not exists transactions_user_country_date_idx on public.transactions(user_id, country, txn_date desc);
 create index if not exists transactions_user_country_category_idx on public.transactions(user_id, country, category, txn_date desc);
+
+
+-- Rahman Expense v2.14 transaction-to-account links.
+-- These columns let expenses/income/transfers update the correct cash, bank/debit or credit-card balance.
+alter table public.transactions add column if not exists account_id uuid;
+alter table public.transactions add column if not exists to_account_id uuid;
+create index if not exists transactions_user_account_idx on public.transactions(user_id, account_id);
+create index if not exists transactions_user_to_account_idx on public.transactions(user_id, to_account_id);
 
 create table if not exists public.monthly_budgets (
   id uuid primary key default gen_random_uuid(),

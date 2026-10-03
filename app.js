@@ -190,6 +190,8 @@ function normalizeState(){
     category:t.type==='expense'?normalizeCategoryName(t.category,t.subcategory):'',
     subcategory:t.type==='expense'?normalizeSubcategoryName(t.category,t.subcategory):'',
     createdAt:t.createdAt||new Date().toISOString(),
+    accountId:String(t.accountId||''),
+    toAccountId:String(t.toAccountId||''),
     updatedAt:t.updatedAt||t.createdAt||new Date().toISOString()
   }));
 
@@ -233,10 +235,10 @@ function budgetKey(m,cat,c=country){ return `${c}|${m}|${cat}`; }
 function splitBudgetKey(key){ const p=String(key).split('|'); return p.length>=3?[p[0],p[1],p.slice(2).join('|')]:['KW',p[0]||'',p.slice(1).join('|')]; }
 function remoteTxToLocal(r){
   const rc=COUNTRIES[r.country]?r.country:'KW';
-  return {id:r.id,country:rc,type:r.type,amount:n(r.amount),merchant:r.merchant||'',category:r.type==='expense'?normalizeCategoryName(r.category,r.subcategory):'',subcategory:r.type==='expense'?normalizeSubcategoryName(r.category,r.subcategory):'',date:r.txn_date,payment:r.payment_method||'',note:r.note||'',createdAt:r.created_at,updatedAt:r.updated_at};
+  return {id:r.id,country:rc,type:r.type,amount:n(r.amount),merchant:r.merchant||'',category:r.type==='expense'?normalizeCategoryName(r.category,r.subcategory):'',subcategory:r.type==='expense'?normalizeSubcategoryName(r.category,r.subcategory):'',date:r.txn_date,payment:r.payment_method||'',accountId:r.account_id||'',toAccountId:r.to_account_id||'',note:r.note||'',createdAt:r.created_at,updatedAt:r.updated_at};
 }
 function localTxToRemote(t,userId){
-  return {id:t.id,user_id:userId,country:COUNTRIES[t.country]?t.country:'KW',type:t.type,amount:n(t.amount),merchant:t.merchant||null,category:t.category||null,subcategory:t.subcategory||null,txn_date:t.date,payment_method:t.payment||null,note:t.note||null,receipt_retained:false,created_at:t.createdAt||new Date().toISOString(),updated_at:t.updatedAt||new Date().toISOString()};
+  return {id:t.id,user_id:userId,country:COUNTRIES[t.country]?t.country:'KW',type:t.type,amount:n(t.amount),merchant:t.merchant||null,category:t.category||null,subcategory:t.subcategory||null,txn_date:t.date,payment_method:t.payment||null,account_id:validUuid(t.accountId)?t.accountId:null,to_account_id:validUuid(t.toAccountId)?t.toAccountId:null,note:t.note||null,receipt_retained:false,created_at:t.createdAt||new Date().toISOString(),updated_at:t.updatedAt||new Date().toISOString()};
 }
 
 function remoteAccountToLocal(r){
@@ -256,6 +258,54 @@ function accountSummary(c=country){
   const creditAvailable=Math.max(0,creditLimit-creditUsed);
   const netAfterCredit=liquidBalance-creditUsed;
   return {cashBalance,bankBalance,liquidBalance,debitBalance:liquidBalance,creditLimit,creditUsed,creditAvailable,netAfterCredit};
+}
+
+function accountById(id=''){ return state.accounts.find(a=>a.id===id)||null; }
+function accountDisplayName(id=''){ const a=accountById(id); return a?a.name:''; }
+function accountChoices(c=country,types=null){
+  const list=countryAccounts(c).filter(a=>!types||types.includes(a.type));
+  return [...list].sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name));
+}
+function transactionAccountOptions(c=country,types=null,selected=''){
+  return `<option value="">Not linked</option>`+accountChoices(c,types).map(a=>`<option value="${escapeHtml(a.id)}" ${selected===a.id?'selected':''}>${escapeHtml(a.name)} · ${escapeHtml(accountTypeLabelFor(a.type,c))}</option>`).join('');
+}
+function accountTypeLabelFor(t,c=country){ return ({debit:'Debit card',credit:'Credit card',bank:'Bank account',cash:c==='KW'?'Cash in hand':'Cash'})[t]||'Account'; }
+function suggestAccountForPayment(payment='',c=country){
+  const p=String(payment).toLowerCase(); const list=countryAccounts(c);
+  if(/credit/.test(p)) return list.find(a=>a.type==='credit')||null;
+  if(/cash/.test(p)) return list.find(a=>a.type==='cash')||null;
+  if(/debit|knet|bank transfer|net banking|upi|apple pay/.test(p)) return list.find(a=>a.type==='debit')||list.find(a=>a.type==='bank')||null;
+  return null;
+}
+function applyTransactionAccountEffect(t,mode=1){
+  if(!t||!n(t.amount)) return;
+  const amount=n(t.amount)*mode; const now=new Date().toISOString();
+  const touch=a=>{ if(a) a.updatedAt=now; };
+  if(t.type==='expense'){
+    const a=accountById(t.accountId); if(!a) return;
+    if(a.type==='credit') a.outstanding=Math.max(0,n(a.outstanding)+amount);
+    else a.balance=n(a.balance)-amount;
+    touch(a); return;
+  }
+  if(t.type==='income'){
+    const a=accountById(t.accountId); if(!a) return;
+    if(a.type==='credit') a.outstanding=Math.max(0,n(a.outstanding)-amount);
+    else a.balance=n(a.balance)+amount;
+    touch(a); return;
+  }
+  if(t.type==='transfer'){
+    const from=accountById(t.accountId), to=accountById(t.toAccountId);
+    if(from){
+      if(from.type==='credit') from.outstanding=Math.max(0,n(from.outstanding)+amount);
+      else from.balance=n(from.balance)-amount;
+      touch(from);
+    }
+    if(to){
+      if(to.type==='credit') to.outstanding=Math.max(0,n(to.outstanding)-amount);
+      else to.balance=n(to.balance)+amount;
+      touch(to);
+    }
+  }
 }
 
 async function stopRealtime(){
@@ -578,7 +628,7 @@ async function syncCloud(silent=false){
     cloudStatus.lastSync=now;
     await saveState();
     if(!silent) toast('Kuwait and India cloud sync complete.');
-  }catch(err){ const raw=err?.message||'Sync failed.'; cloudStatus.error=/country|opening_balance_inr|accounts|account_type|credit_limit|outstanding_balance|no unique|on conflict/i.test(raw)?'Accounts database update required — run the included supabase_schema.sql once in Supabase SQL Editor.':raw; if(!silent) toast(`Sync failed: ${cloudStatus.error}`); }
+  }catch(err){ const raw=err?.message||'Sync failed.'; cloudStatus.error=/country|opening_balance_inr|accounts|account_type|credit_limit|outstanding_balance|account_id|to_account_id|no unique|on conflict/i.test(raw)?'Accounts database update required — run the included supabase_schema.sql once in Supabase SQL Editor.':raw; if(!silent) toast(`Sync failed: ${cloudStatus.error}`); }
   finally{ cloudStatus.syncing=false; render(); }
 }
 async function initCloud(){
@@ -695,7 +745,7 @@ function migrateLegacy(legacy){
   };
   next.transactions=legacy.tx.map(t=>{
     const mapped=catMap[t.cat]||['Other','Uncategorized'];
-    return {id:String(t.id||uid()),country:'KW',type:t.type||'expense',amount:n(t.amt),merchant:'',category:mapped[0],subcategory:mapped[1],date:safeDate(t.date),payment:'',note:t.note||'',createdAt:new Date().toISOString()};
+    return {id:String(t.id||uid()),country:'KW',type:t.type||'expense',amount:n(t.amt),merchant:'',category:mapped[0],subcategory:mapped[1],date:safeDate(t.date),payment:'',accountId:'',toAccountId:'',note:t.note||'',createdAt:new Date().toISOString()};
   });
   const current = currentMonth();
   next.budgets[`KW|${current}`]={};
@@ -760,12 +810,16 @@ function dashboardView(){
   const transfers=sumType(tx,'transfer');
   const budget=totalBudget();
   const remaining=budget-spent;
-  const savings=income-spent-transfers;
+  const savings=income-spent;
   const used=budget?spent/budget*100:0;
+  const allCountryTx=countryTransactions();
+  const allIncome=sumType(allCountryTx,'income');
+  const allExpense=sumType(allCountryTx,'expense');
+  const allTransfer=sumType(allCountryTx,'transfer');
   const acct=accountSummary();
-  // Available balance is the money actually available after current credit-card dues:
-  // cash in hand + bank/debit balances - credit-card outstanding.
-  const available=acct.netAfterCredit;
+  const hasAccountBalances=countryAccounts().length>0;
+  // Available balance is real liquid money minus current credit-card dues.
+  const available=hasAccountBalances?acct.netAfterCredit:(openingBalance()+allIncome-allExpense);
   const catRows=Object.keys(CATEGORIES).map((cat,idx)=>({cat,idx,spent:categorySpend(tx,cat),budget:budgetFor(cat)})).filter(x=>x.spent>0||x.budget>0).sort((a,b)=>b.spent-a.spent);
   const latest=[...tx].sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.createdAt||'').localeCompare(String(a.createdAt||''))).slice(0,6);
   const budgetClass=used>=100?'over':used>=90?'warning':'';
@@ -777,7 +831,7 @@ function dashboardView(){
       <div class="overview-main">
         <div class="eyebrow">AVAILABLE BALANCE</div>
         <div class="overview-value">${money(available)}</div>
-        <div class="overview-note">Cash ${money(acct.cashBalance)} + bank ${money(acct.bankBalance)} − card due ${money(acct.creditUsed)}</div>
+        <div class="overview-note">${hasAccountBalances?`Cash + bank ${money(acct.liquidBalance)} − credit due ${money(acct.creditUsed)}`:`${monthLabel(month)} · ${savings>=0?`${money(savings)} saved so far`:`${money(Math.abs(savings))} above monthly income`}`}</div>
       </div>
       <div class="overview-side">
         <div class="overview-progress-head"><span>Monthly budget</span><strong>${budget?`${Math.round(used)}%`:'—'}</strong></div>
@@ -843,7 +897,9 @@ function txRow(t){
   const ex=t.type==='expense', inc=t.type==='income';
   const icon=ex?(CATEGORIES[t.category]?.icon||'📦'):inc?'💼':'↗️';
   const title=inc?(t.merchant||'Income'):t.type==='transfer'?(t.merchant||'Transfer'):(t.merchant||t.subcategory||t.category||'Expense');
-  const meta=ex?`${t.category}${t.subcategory?` · ${t.subcategory}`:''} · ${t.date}`:`${t.note||t.type} · ${t.date}`;
+  const linked=t.type==='transfer'?[accountDisplayName(t.accountId),accountDisplayName(t.toAccountId)].filter(Boolean).join(' → '):accountDisplayName(t.accountId);
+  const base=ex?`${t.category}${t.subcategory?` · ${t.subcategory}`:''}`:(t.note||t.type);
+  const meta=`${base}${linked?` · ${linked}`:''} · ${t.date}`;
   return `<div class="tx-row" data-open-tx="${escapeHtml(t.id)}"><div class="tx-icon">${icon}</div><div><div class="tx-title">${escapeHtml(title)}</div><div class="tx-meta">${escapeHtml(meta)}</div></div><div class="tx-amount ${ex?'expense':inc?'income':''}">${ex||t.type==='transfer'?'−':'+'}${money(t.amount)}</div><button class="mini-menu" data-edit-tx="${escapeHtml(t.id)}" aria-label="Edit transaction">⋯</button></div>`;
 }
 
@@ -897,7 +953,7 @@ function reportsView(){
   const tx=monthTransactions();
   const expenses=tx.filter(t=>t.type==='expense');
   const spent=sumType(tx,'expense'), income=sumType(tx,'income'), budget=totalBudget();
-  const saving=income-spent-sumType(tx,'transfer');
+  const saving=income-spent;
   const byCat=Object.keys(CATEGORIES).map((cat,idx)=>({cat,idx,v:categorySpend(tx,cat)})).filter(x=>x.v>0).sort((a,b)=>b.v-a.v);
   let acc=0;
   const gradient=byCat.length?byCat.map(x=>{const s=acc;acc+=spent?x.v/spent*100:0;return `${PALETTE[x.idx%PALETTE.length]} ${s}% ${acc}%`;}).join(','):'#e7ece9 0 100%';
@@ -924,7 +980,7 @@ function reportsView(){
   return shell(content,'Reports','Budget vs actual, category trends and exportable records.');
 }
 
-function accountTypeLabel(t){ return ({debit:'Debit card',credit:'Credit card',bank:'Bank account',cash:country==='KW'?'Cash in hand':'Cash'})[t]||'Account'; }
+function accountTypeLabel(t){ return accountTypeLabelFor(t,country); }
 function accountCardHtml(a){
   const credit=a.type==='credit';
   const available=Math.max(0,n(a.creditLimit)-n(a.outstanding));
@@ -956,6 +1012,20 @@ function upsertQuickAccount(type,values={}){
   a.updatedAt=now;
   return a;
 }
+function openTransferPreset(kind){
+  openTransactionModal();
+  setModalType('transfer');
+  const from=document.getElementById('f-transfer-from');
+  const to=document.getElementById('f-transfer-to');
+  const merchant=document.getElementById('f-merchant');
+  const payment=document.getElementById('f-payment');
+  const bank=quickPrimaryAccount('bank');
+  const target=kind==='withdrawal'?quickPrimaryAccount('cash'):quickPrimaryAccount('credit');
+  if(from&&bank) from.value=bank.id;
+  if(to&&target) to.value=target.id;
+  if(merchant) merchant.value=kind==='withdrawal'?'Cash withdrawal':'Credit card payment / top-up';
+  if(payment) payment.value='Bank Transfer';
+}
 async function saveKuwaitQuickBalances(){
   const cashEl=document.getElementById('quick-cash-balance');
   const bankEl=document.getElementById('quick-bank-balance');
@@ -980,7 +1050,7 @@ function accountsView(){
   const primaryCash=country==='KW'?quickPrimaryAccount('cash'):null;
   const primaryBank=country==='KW'?quickPrimaryAccount('bank'):null;
   const primaryCredit=country==='KW'?quickPrimaryAccount('credit'):null;
-  const quickUpdate=country==='KW'?`<div class="section card quick-balance-card"><div class="section-head"><div><h3>Quick update — Kuwait balances</h3><div class="subtle">Update your main cash, bank balance and credit-card values here. Changes are saved locally immediately and synchronized to your signed-in devices.</div></div><span class="status-pill good">KWD</span></div><div class="form-grid quick-balance-grid"><div class="field"><label>Cash in hand (KWD)</label><input class="input" id="quick-cash-balance" type="number" step="0.001" value="${escapeHtml(primaryCash?.balance??0)}" placeholder="0.000" /></div><div class="field"><label>Cash at bank / debit balance (KWD)</label><input class="input" id="quick-bank-balance" type="number" step="0.001" value="${escapeHtml(primaryBank?.balance??0)}" placeholder="0.000" /></div><div class="field"><label>Credit-card limit (KWD)</label><input class="input" id="quick-credit-limit" type="number" min="0" step="0.001" value="${escapeHtml(primaryCredit?.creditLimit??0)}" placeholder="0.000" /></div><div class="field"><label>Credit-card outstanding (KWD)</label><input class="input" id="quick-credit-outstanding" type="number" min="0" step="0.001" value="${escapeHtml(primaryCredit?.outstanding??0)}" placeholder="0.000" /></div></div><div class="actions" style="margin-top:14px"><button class="btn primary" type="button" data-action="quick-balance-save">Save balances</button><button class="btn" type="button" data-action="cloud-sync">Sync now</button></div><div class="subtle" style="margin-top:10px">If you use multiple bank accounts or credit cards, use the detailed cards below to maintain each account separately. Quick update edits the primary account in each group.</div></div>`:'';
+  const quickUpdate=country==='KW'?`<div class="section card quick-balance-card"><div class="section-head"><div><h3>Quick update — Kuwait balances</h3><div class="subtle">Update your main cash, bank balance and credit-card values here. Changes are saved locally immediately and synchronized to your signed-in devices.</div></div><span class="status-pill good">KWD</span></div><div class="form-grid quick-balance-grid"><div class="field"><label>Cash in hand (KWD)</label><input class="input" id="quick-cash-balance" type="number" step="0.001" value="${escapeHtml(primaryCash?.balance??0)}" placeholder="0.000" /></div><div class="field"><label>Cash at bank / debit balance (KWD)</label><input class="input" id="quick-bank-balance" type="number" step="0.001" value="${escapeHtml(primaryBank?.balance??0)}" placeholder="0.000" /></div><div class="field"><label>Credit-card limit (KWD)</label><input class="input" id="quick-credit-limit" type="number" min="0" step="0.001" value="${escapeHtml(primaryCredit?.creditLimit??0)}" placeholder="0.000" /></div><div class="field"><label>Credit-card outstanding (KWD)</label><input class="input" id="quick-credit-outstanding" type="number" min="0" step="0.001" value="${escapeHtml(primaryCredit?.outstanding??0)}" placeholder="0.000" /></div></div><div class="actions" style="margin-top:14px"><button class="btn primary" type="button" data-action="quick-balance-save">Save balances</button><button class="btn" type="button" data-action="cash-withdrawal">Cash withdrawal</button><button class="btn" type="button" data-action="credit-topup">Pay credit card</button><button class="btn" type="button" data-action="cloud-sync">Sync now</button></div><div class="subtle" style="margin-top:10px">Cash withdrawal moves money from bank to cash. Pay credit card reduces bank balance and reduces card outstanding. If you use multiple accounts/cards, choose the exact source and destination in the transfer screen.</div></div>`:'';
   const content=`<div class="summary-grid accounts-summary"><div class="summary-card"><div class="summary-icon income">◉</div><div><div class="metric-label">Cash in hand</div><div class="summary-value positive">${money(sum.cashBalance)}</div><div class="summary-note">${countryMeta().name}</div></div></div><div class="summary-card"><div class="summary-icon income">▣</div><div><div class="metric-label">Bank / debit balance</div><div class="summary-value positive">${money(sum.bankBalance)}</div><div class="summary-note">Bank accounts + debit cards</div></div></div><div class="summary-card"><div class="summary-icon budget">◎</div><div><div class="metric-label">Cash + bank</div><div class="summary-value positive">${money(sum.liquidBalance)}</div><div class="summary-note">Liquid funds</div></div></div><div class="summary-card"><div class="summary-icon expense">↗</div><div><div class="metric-label">Credit available</div><div class="summary-value">${money(sum.creditAvailable)}</div><div class="summary-note">${creditNote}</div></div></div></div>${quickUpdate}<div class="section"><div class="section-head"><h3>${countryMeta().flag} ${countryMeta().name} money & cards</h3><button class="btn primary" type="button" data-action="add-account">+ Add account/card</button></div>${accountGroup(country==='KW'?'Cash in hand':'Cash',cash,country==='KW'?'No cash-in-hand balance added yet':'No cash balance added yet')}${accountGroup('Bank & debit cards',bank,'No bank account or debit card added yet')}${accountGroup('Credit cards',credit,'No credit card added yet')}</div>`;
   return shell(content,'Accounts & cards',country==='KW'?'Kuwait view: cash in hand, bank/debit balances and credit cards are shown separately and can be updated quickly.':'Track cash, bank/debit balances and credit cards separately for India.');
 }
@@ -1109,6 +1179,8 @@ function bindView(){
   document.querySelectorAll('[data-action="cloud-sync"]').forEach(el=>el.addEventListener('click',()=>syncCloud(false)));
   document.querySelectorAll('[data-action="cloud-signout"]').forEach(el=>el.addEventListener('click',cloudSignOut));
   document.querySelectorAll('[data-action="quick-balance-save"]').forEach(el=>el.addEventListener('click',saveKuwaitQuickBalances));
+  document.querySelectorAll('[data-action="cash-withdrawal"]').forEach(el=>el.addEventListener('click',()=>openTransferPreset('withdrawal')));
+  document.querySelectorAll('[data-action="credit-topup"]').forEach(el=>el.addEventListener('click',()=>openTransferPreset('credit')));
 
   for(const c of ['KW','IN']){ const opening=document.getElementById(`set-opening-${c}`); if(opening) opening.addEventListener('change',async e=>{state.settings.openingBalances[c]=n(e.target.value);markProfileDirty();await saveState();queueCloudSync();toast(`${COUNTRIES[c].name} opening balance saved.`);}); }
   const delRec=document.getElementById('set-delete-receipt'); if(delRec) delRec.addEventListener('change',async e=>{state.settings.deleteReceiptAfterSave=e.target.checked;await saveState();});
@@ -1167,7 +1239,7 @@ function quickScanReceipt(){
 function openTransactionModal(id=null,scan=false){
   modalTxId=id;
   const existing=id?state.transactions.find(t=>t.id===id):null;
-  const t=existing?{...existing}:{country,type:'expense',amount:'',merchant:'',category:'Groceries',subcategory:'General',date:today(),payment:'',note:''};
+  const t=existing?{...existing}:{country,type:'expense',amount:'',merchant:'',category:'Groceries',subcategory:'General',date:today(),payment:'',accountId:'',toAccountId:'',note:''};
   const modalCountry=COUNTRIES[t.country]?t.country:country; const modalMeta=countryMeta(modalCountry);
   modalRoot.innerHTML=`<div class="modal-backdrop" id="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="Transaction editor">
     <div class="modal-head"><div><h3>${existing?'Edit transaction':scan?'Scan receipt':'Add transaction'}</h3><div class="subtle">${modalMeta.flag} ${modalMeta.name} · ${modalMeta.currency} · ${scan?'Photo is used temporarily and not stored.':'Keep every entry clean and report-ready.'}</div></div><button class="btn icon" id="modal-close" aria-label="Close">×</button></div>
@@ -1182,6 +1254,9 @@ function openTransactionModal(id=null,scan=false){
           <div class="field expense-only"><label>Category</label><select class="select" id="f-category">${Object.keys(CATEGORIES).map(c=>`<option ${t.category===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select></div>
           <div class="field expense-only"><label>Subcategory</label><select class="select" id="f-subcategory"></select></div>
           <div class="field"><label>Payment method</label><select class="select" id="f-payment"><option value="">Not specified</option>${paymentMethods(modalCountry).map(x=>`<option ${t.payment===x?'selected':''}>${x}</option>`).join('')}</select></div>
+          <div class="field account-single"><label id="account-link-label">Paid from</label><select class="select" id="f-account">${transactionAccountOptions(modalCountry,null,t.accountId||'')}</select><div class="subtle">Linked balances update automatically.</div></div>
+          <div class="field transfer-only"><label>Transfer from</label><select class="select" id="f-transfer-from">${transactionAccountOptions(modalCountry,['cash','bank','debit'],t.accountId||'')}</select></div>
+          <div class="field transfer-only"><label>Transfer to</label><select class="select" id="f-transfer-to">${transactionAccountOptions(modalCountry,['cash','bank','debit','credit'],t.toAccountId||'')}</select><div class="subtle">Bank → Cash = cash withdrawal. Bank → Credit Card = card payment/top-up.</div></div>
           <div class="field"><label>Note</label><input class="input" id="f-note" value="${escapeHtml(t.note||'')}" placeholder="Optional note" /></div>
         </div>
       </div>
@@ -1193,7 +1268,10 @@ function openTransactionModal(id=null,scan=false){
   function fillSubs(preferred){ if(!catSel||!subSel) return; subSel.innerHTML=(CATEGORIES[catSel.value]?.subs||['Other']).map(s=>`<option ${preferred===s?'selected':''}>${escapeHtml(s)}</option>`).join(''); }
   fillSubs(t.subcategory);
   if(catSel) catSel.addEventListener('change',()=>fillSubs());
+  const paymentSel=document.getElementById('f-payment');
+  if(paymentSel) paymentSel.addEventListener('change',()=>{ const acc=document.getElementById('f-account'); if(acc&&!acc.value){ const suggested=suggestAccountForPayment(paymentSel.value,modalCountry); if(suggested) acc.value=suggested.id; } });
   document.querySelectorAll('#type-seg [data-type]').forEach(btn=>btn.addEventListener('click',()=>setModalType(btn.dataset.type)));
+  setModalType(t.type);
   document.getElementById('modal-close').addEventListener('click',closeModal);
   document.getElementById('modal-cancel').addEventListener('click',closeModal);
   document.getElementById('modal-backdrop').addEventListener('click',e=>{if(e.target.id==='modal-backdrop') closeModal();});
@@ -1211,7 +1289,10 @@ function receiptScannerHtml(){
 function setModalType(type){
   document.querySelectorAll('#type-seg [data-type]').forEach(b=>b.classList.toggle('active',b.dataset.type===type));
   document.querySelectorAll('.expense-only').forEach(el=>el.style.display=type==='expense'?'grid':'none');
-  const label=document.getElementById('merchant-label'); if(label) label.textContent=type==='income'?'Income source':type==='transfer'?'Transferred to':'Merchant / payee';
+  document.querySelectorAll('.account-single').forEach(el=>el.style.display=type==='transfer'?'none':'grid');
+  document.querySelectorAll('.transfer-only').forEach(el=>el.style.display=type==='transfer'?'grid':'none');
+  const label=document.getElementById('merchant-label'); if(label) label.textContent=type==='income'?'Income source':type==='transfer'?'Transfer / description':'Merchant / payee';
+  const accLabel=document.getElementById('account-link-label'); if(accLabel) accLabel.textContent=type==='income'?'Received to':'Paid from';
 }
 function modalType(){ return document.querySelector('#type-seg .active')?.dataset.type||'expense'; }
 
@@ -1228,24 +1309,33 @@ async function saveTransactionFromModal(e){
   const merchant=document.getElementById('f-merchant').value.trim();
   const cat=document.getElementById('f-category')?.value||'';
   const sub=document.getElementById('f-subcategory')?.value||'';
+  const oldTx=modalTxId?state.transactions.find(t=>t.id===modalTxId):null;
+  const accountId=type==='transfer'?(document.getElementById('f-transfer-from')?.value||''):(document.getElementById('f-account')?.value||'');
+  const toAccountId=type==='transfer'?(document.getElementById('f-transfer-to')?.value||''):'';
+  if(type==='transfer'&&accountId&&toAccountId&&accountId===toAccountId){ toast('Choose two different accounts for a transfer.'); return; }
   const obj={
-    id:modalTxId||uid(), country:modalTxId?(state.transactions.find(t=>t.id===modalTxId)?.country||country):country, type, amount, merchant,
+    id:modalTxId||uid(), country:oldTx?.country||country, type, amount, merchant,
     category:type==='expense'?cat:'', subcategory:type==='expense'?sub:'',
     date:safeDate(document.getElementById('f-date').value),
     payment:document.getElementById('f-payment').value,
+    accountId,toAccountId,
     note:document.getElementById('f-note').value.trim(),
-    createdAt:modalTxId?(state.transactions.find(t=>t.id===modalTxId)?.createdAt||new Date().toISOString()):new Date().toISOString(),
+    createdAt:oldTx?.createdAt||new Date().toISOString(),
     updatedAt:new Date().toISOString()
   };
   if(type==='expense'&&merchant){ state.merchantRules[merchantRuleKey(merchant)]={category:cat,subcategory:sub}; }
+  if(oldTx) applyTransactionAccountEffect(oldTx,-1);
+  applyTransactionAccountEffect(obj,1);
   const i=state.transactions.findIndex(t=>t.id===obj.id); if(i>=0) state.transactions[i]=obj; else state.transactions.push(obj);
   await saveState(); queueCloudSync(); month=obj.date.slice(0,7); closeModal(); render();
-  toast(`Transaction ${i>=0?'updated':'saved'}${state.settings.deleteReceiptAfterSave&&pendingReceiptFile?' · receipt photo deleted':''}.`);
+  const balanceMsg=(accountId||toAccountId)?' · account balances updated':'';
+  toast(`Transaction ${i>=0?'updated':'saved'}${balanceMsg}${state.settings.deleteReceiptAfterSave&&pendingReceiptFile?' · receipt photo deleted':''}.`);
 }
 
 async function deleteTransaction(id){
   if(!confirm('Delete this transaction?')) return;
-  state.transactions=state.transactions.filter(t=>t.id!==id); if(validUuid(id)) state.syncMeta.deletedTransactions.push({id,deletedAt:new Date().toISOString()}); await saveState(); queueCloudSync(); closeModal(); render(); toast('Transaction deleted.');
+  const old=state.transactions.find(t=>t.id===id); if(old) applyTransactionAccountEffect(old,-1);
+  state.transactions=state.transactions.filter(t=>t.id!==id); if(validUuid(id)) state.syncMeta.deletedTransactions.push({id,deletedAt:new Date().toISOString()}); await saveState(); queueCloudSync(); closeModal(); render(); toast('Transaction deleted and linked account balances reversed.');
 }
 
 function bindScanner(){
@@ -1606,7 +1696,7 @@ async function saveStatementImport(){
     const sub=r.type==='expense'?(r.subcategory||CATEGORIES[cat]?.subs?.[0]||'Other'):'';
     const noteParts=[`Imported from ${pendingStatementFileName}`, r.credit>0?'Statement Credit (Cr)':'Statement Debit (Dr)'];
     if(r.narration) noteParts.push(r.narration); if(r.reference) noteParts.push(`Ref: ${r.reference}`); noteParts.push(`[Import ID: ${r.importId}]`);
-    state.transactions.push({id:uid(),country:r.country||country,type:r.type,amount:n(r.amount),merchant:r.merchant||deriveStatementMerchant(r.narration),category:cat,subcategory:sub,date:r.date,payment:'Bank / Card Statement',note:noteParts.join(' · '),createdAt:now,updatedAt:now});
+    state.transactions.push({id:uid(),country:r.country||country,type:r.type,amount:n(r.amount),merchant:r.merchant||deriveStatementMerchant(r.narration),category:cat,subcategory:sub,date:r.date,payment:'Bank / Card Statement',accountId:'',toAccountId:'',note:noteParts.join(' · '),createdAt:now,updatedAt:now});
     if(r.type==='expense'&&r.merchant) state.merchantRules[merchantRuleKey(r.merchant,r.country||country)]={category:cat,subcategory:sub};
   }
   const latest=[...selected].sort((a,b)=>String(b.date).localeCompare(String(a.date)))[0]; if(latest?.date) month=latest.date.slice(0,7);
