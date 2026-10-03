@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.10';
+const APP_VERSION = '2.13';
 const COUNTRIES = {
   KW: { name: 'Kuwait', flag: '🇰🇼', currency: 'KWD', decimals: 3 },
   IN: { name: 'India', flag: '🇮🇳', currency: 'INR', decimals: 2 }
@@ -64,6 +64,7 @@ const GENERIC_STATEMENT_WORDS = /point of sale purchase transaction|pos purchase
 const defaultState = () => ({
   version: APP_VERSION,
   transactions: [],
+  accounts: [],
   budgets: {},
   merchantRules: {},
   syncMeta: {
@@ -72,7 +73,8 @@ const defaultState = () => ({
     budgetDeleted: {},
     profileUpdatedAt: '',
     remoteBudgetIds: {},
-    remoteMerchantIds: {}
+    remoteMerchantIds: {},
+    deletedAccounts: []
   },
   settings: {
     activeCountry: 'KW',
@@ -158,6 +160,7 @@ function normalizeState(){
   state.syncMeta.budgetDeleted=state.syncMeta.budgetDeleted||{};
   state.syncMeta.remoteBudgetIds=state.syncMeta.remoteBudgetIds||{};
   state.syncMeta.remoteMerchantIds=state.syncMeta.remoteMerchantIds||{};
+  state.syncMeta.deletedAccounts=Array.isArray(state.syncMeta.deletedAccounts)?state.syncMeta.deletedAccounts:[];
   const legacyOpening=n(state.settings?.openingBalance);
   const hadOpeningBalances=!!state.settings?.openingBalances;
   state.settings={...defaultState().settings,...(state.settings||{})};
@@ -165,6 +168,20 @@ function normalizeState(){
   state.settings.openingBalances={KW:n(state.settings.openingBalances?.KW),IN:n(state.settings.openingBalances?.IN)};
   state.settings.activeCountry=COUNTRIES[state.settings.activeCountry]?state.settings.activeCountry:'KW';
   country=state.settings.activeCountry;
+
+  state.accounts=(state.accounts||[]).map(a=>({
+    id:validUuid(a.id)?a.id:uid(),
+    country:COUNTRIES[a.country]?a.country:'KW',
+    name:String(a.name||'Account').trim()||'Account',
+    type:['debit','credit','bank','cash'].includes(a.type)?a.type:'debit',
+    balance:n(a.balance),
+    creditLimit:Math.max(0,n(a.creditLimit)),
+    outstanding:Math.max(0,n(a.outstanding)),
+    issuer:String(a.issuer||''),
+    last4:String(a.last4||'').replace(/\D/g,'').slice(-4),
+    createdAt:a.createdAt||new Date().toISOString(),
+    updatedAt:a.updatedAt||a.createdAt||new Date().toISOString()
+  }));
 
   state.transactions=(state.transactions||[]).map(t=>({
     ...t,
@@ -220,6 +237,25 @@ function remoteTxToLocal(r){
 }
 function localTxToRemote(t,userId){
   return {id:t.id,user_id:userId,country:COUNTRIES[t.country]?t.country:'KW',type:t.type,amount:n(t.amount),merchant:t.merchant||null,category:t.category||null,subcategory:t.subcategory||null,txn_date:t.date,payment_method:t.payment||null,note:t.note||null,receipt_retained:false,created_at:t.createdAt||new Date().toISOString(),updated_at:t.updatedAt||new Date().toISOString()};
+}
+
+function remoteAccountToLocal(r){
+  return {id:r.id,country:COUNTRIES[r.country]?r.country:'KW',name:r.name||'Account',type:['debit','credit','bank','cash'].includes(r.account_type)?r.account_type:'debit',balance:n(r.balance),creditLimit:n(r.credit_limit),outstanding:n(r.outstanding_balance),issuer:r.issuer||'',last4:r.last4||'',createdAt:r.created_at,updatedAt:r.updated_at};
+}
+function localAccountToRemote(a,userId){
+  return {id:a.id,user_id:userId,country:COUNTRIES[a.country]?a.country:'KW',name:a.name||'Account',account_type:a.type,balance:n(a.balance),credit_limit:Math.max(0,n(a.creditLimit)),outstanding_balance:Math.max(0,n(a.outstanding)),issuer:a.issuer||null,last4:a.last4||null,created_at:a.createdAt||new Date().toISOString(),updated_at:a.updatedAt||new Date().toISOString()};
+}
+function countryAccounts(c=country){ return state.accounts.filter(a=>(COUNTRIES[a.country]?a.country:'KW')===c); }
+function accountSummary(c=country){
+  const list=countryAccounts(c);
+  const cashBalance=list.filter(a=>a.type==='cash').reduce((s,a)=>s+n(a.balance),0);
+  const bankBalance=list.filter(a=>a.type==='debit'||a.type==='bank').reduce((s,a)=>s+n(a.balance),0);
+  const liquidBalance=cashBalance+bankBalance;
+  const creditLimit=list.filter(a=>a.type==='credit').reduce((s,a)=>s+n(a.creditLimit),0);
+  const creditUsed=list.filter(a=>a.type==='credit').reduce((s,a)=>s+n(a.outstanding),0);
+  const creditAvailable=Math.max(0,creditLimit-creditUsed);
+  const netAfterCredit=liquidBalance-creditUsed;
+  return {cashBalance,bankBalance,liquidBalance,debitBalance:liquidBalance,creditLimit,creditUsed,creditAvailable,netAfterCredit};
 }
 
 async function stopRealtime(){
@@ -290,6 +326,16 @@ function applyRealtimePayload(table,payload,userId){
       state.merchantRules[localKey]={category:normalizeCategoryName(row.category,row.subcategory),subcategory:row.subcategory||''};
       state.syncMeta.remoteMerchantIds[row.id]=localKey;
     }
+  }else if(table==='accounts'){
+    if(event==='DELETE'){
+      if(old.id) state.accounts=state.accounts.filter(a=>a.id!==old.id);
+    }else if(row.user_id===userId && row.id){
+      const remote={id:row.id,country:COUNTRIES[row.country]?row.country:'KW',name:row.name||'Account',type:['debit','credit','bank','cash'].includes(row.account_type)?row.account_type:'debit',balance:n(row.balance),creditLimit:n(row.credit_limit),outstanding:n(row.outstanding_balance),issuer:row.issuer||'',last4:row.last4||'',createdAt:row.created_at,updatedAt:row.updated_at};
+      const idx=state.accounts.findIndex(a=>a.id===remote.id);
+      if(idx<0 || new Date(remote.updatedAt||0)>=new Date(state.accounts[idx].updatedAt||0)){
+        if(idx<0) state.accounts.push(remote); else state.accounts[idx]=remote;
+      }
+    }
   }else if(table==='profiles'){
     if(event!=='DELETE' && row.id===userId){
       state.settings.openingBalances.KW=n(row.opening_balance);
@@ -314,6 +360,7 @@ async function startRealtime(){
       .on('postgres_changes',{event:'*',schema:'public',table:'transactions',filter:`user_id=eq.${userId}`},p=>applyRealtimePayload('transactions',p,userId))
       .on('postgres_changes',{event:'*',schema:'public',table:'monthly_budgets',filter:`user_id=eq.${userId}`},p=>applyRealtimePayload('monthly_budgets',p,userId))
       .on('postgres_changes',{event:'*',schema:'public',table:'merchant_rules',filter:`user_id=eq.${userId}`},p=>applyRealtimePayload('merchant_rules',p,userId))
+      .on('postgres_changes',{event:'*',schema:'public',table:'accounts',filter:`user_id=eq.${userId}`},p=>applyRealtimePayload('accounts',p,userId))
       .on('postgres_changes',{event:'*',schema:'public',table:'profiles',filter:`id=eq.${userId}`},p=>applyRealtimePayload('profiles',p,userId))
       .subscribe(status=>{
         realtimeStatus=status;
@@ -412,13 +459,14 @@ async function syncCloud(silent=false){
     const client=await getCloudClient();
     const {data:userData,error:userErr}=await client.auth.getUser(); if(userErr) throw userErr;
     const userId=userData?.user?.id; if(!userId) throw new Error('No signed-in user.');
-    const [profileRes,txRes,budgetRes,merchantRes]=await Promise.all([
+    const [profileRes,txRes,budgetRes,merchantRes,accountRes]=await Promise.all([
       client.from('profiles').select('*').eq('id',userId).maybeSingle(),
       client.from('transactions').select('*').eq('user_id',userId),
       client.from('monthly_budgets').select('*').eq('user_id',userId),
-      client.from('merchant_rules').select('*').eq('user_id',userId)
+      client.from('merchant_rules').select('*').eq('user_id',userId),
+      client.from('accounts').select('*').eq('user_id',userId)
     ]);
-    for(const r of [profileRes,txRes,budgetRes,merchantRes]) if(r.error) throw r.error;
+    for(const r of [profileRes,txRes,budgetRes,merchantRes,accountRes]) if(r.error) throw r.error;
 
     const tomb=new Map(state.syncMeta.deletedTransactions.map(x=>[x.id,x.deletedAt]));
     const localMap=new Map(state.transactions.map(t=>[t.id,t]));
@@ -453,6 +501,15 @@ async function syncCloud(silent=false){
       if(r.id) state.syncMeta.remoteMerchantIds[r.id]=localKey;
       if(!state.merchantRules[localKey]) state.merchantRules[localKey]={category:normalizeCategoryName(r.category,r.subcategory),subcategory:r.subcategory||''};
     }
+    for(const r of (accountRes.data||[])){
+      const remote=remoteAccountToLocal(r);
+      const idx=state.accounts.findIndex(a=>a.id===remote.id);
+      const local=idx>=0?state.accounts[idx]:null;
+      if(!local || new Date(remote.updatedAt||0)>new Date(local.updatedAt||0)){
+        if(idx<0) state.accounts.push(remote); else state.accounts[idx]=remote;
+      }
+    }
+
     const prof=profileRes.data;
     if(prof){
       const localTs=state.syncMeta.profileUpdatedAt||'';
@@ -499,6 +556,15 @@ async function syncCloud(silent=false){
       for(const r of (merchantUpsertData||[])){const c=COUNTRIES[r.country]?r.country:'KW';state.syncMeta.remoteMerchantIds[r.id]=merchantRuleKey(r.merchant_key,c);}
     }
 
+    if(state.accounts.length){
+      const {error}=await client.from('accounts').upsert(state.accounts.map(a=>localAccountToRemote(a,userId)),{onConflict:'id'}); if(error) throw error;
+    }
+    if(state.syncMeta.deletedAccounts.length){
+      const ids=state.syncMeta.deletedAccounts.map(x=>x.id).filter(validUuid);
+      if(ids.length){ const {error}=await client.from('accounts').delete().eq('user_id',userId).in('id',ids); if(error) throw error; }
+      state.syncMeta.deletedAccounts=[];
+    }
+
     const now=new Date().toISOString();
     const {error:profileError}=await client.from('profiles').upsert({
       id:userId,
@@ -512,7 +578,7 @@ async function syncCloud(silent=false){
     cloudStatus.lastSync=now;
     await saveState();
     if(!silent) toast('Kuwait and India cloud sync complete.');
-  }catch(err){ const raw=err?.message||'Sync failed.'; cloudStatus.error=/country|opening_balance_inr|no unique|on conflict/i.test(raw)?'v2.8 database update required — run the new supabase_schema.sql once in Supabase SQL Editor.':raw; if(!silent) toast(`Sync failed: ${cloudStatus.error}`); }
+  }catch(err){ const raw=err?.message||'Sync failed.'; cloudStatus.error=/country|opening_balance_inr|accounts|account_type|credit_limit|outstanding_balance|no unique|on conflict/i.test(raw)?'Accounts database update required — run the included supabase_schema.sql once in Supabase SQL Editor.':raw; if(!silent) toast(`Sync failed: ${cloudStatus.error}`); }
   finally{ cloudStatus.syncing=false; render(); }
 }
 async function initCloud(){
@@ -659,7 +725,7 @@ async function loadState(){
 }
 
 function navItems(){ return [
-  ['dashboard','⌂','Dashboard'],['transactions','↔','Transactions'],['budgets','◎','Budgets'],['reports','▥','Reports'],['settings','⚙','Settings']
+  ['dashboard','⌂','Dashboard'],['transactions','↔','Transactions'],['accounts','◫','Accounts'],['budgets','◎','Budgets'],['reports','▥','Reports'],['settings','⚙','Settings']
 ]; }
 function navHtml(mobile=false){
   return `<${mobile?'div':'nav'} class="${mobile?'mobile-nav':'nav'}">${navItems().map(([k,i,label])=>`<button class="${mobile?'':'nav-btn'} ${view===k?'active':''}" data-nav="${k}"><span class="${mobile?'':'nav-icon'}">${i}</span>${label}</button>`).join('')}</${mobile?'div':'nav'}>`;
@@ -704,6 +770,7 @@ function dashboardView(){
   const catRows=Object.keys(CATEGORIES).map((cat,idx)=>({cat,idx,spent:categorySpend(tx,cat),budget:budgetFor(cat)})).filter(x=>x.spent>0||x.budget>0).sort((a,b)=>b.spent-a.spent);
   const latest=[...tx].sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.createdAt||'').localeCompare(String(a.createdAt||''))).slice(0,6);
   const budgetClass=used>=100?'over':used>=90?'warning':'';
+  const acct=accountSummary();
 
   const content=`
     <div class="dashboard-month"><div>${monthSwitchHtml()}</div><div class="status-pill ${budget&&used<90?'good':used>=100?'over':used>=90?'warn':''}">${budget?`${Math.round(used)}% budget used`:'Budget not set'}</div></div>
@@ -726,6 +793,17 @@ function dashboardView(){
       <button class="summary-card summary-link" type="button" data-summary-link="expense" aria-label="Open expense transactions"><div class="summary-icon expense">↑</div><div><div class="metric-label">Expenses</div><div class="summary-value negative">${money(spent)}</div><div class="summary-note">${tx.filter(t=>t.type==='expense').length} transactions · tap to view</div></div><span class="card-arrow">›</span></button>
       <button class="summary-card summary-link" type="button" data-summary-link="budget" aria-label="Open monthly budgets"><div class="summary-icon budget">◎</div><div><div class="metric-label">Budget left</div><div class="summary-value ${remaining<0?'negative':''}">${budget?money(remaining):'—'}</div><div class="summary-note">${budget?`${money(budget)} planned`:'Set monthly budget'} · tap to manage</div></div><span class="card-arrow">›</span></button>
     </div>
+
+    <button class="card account-overview-link" type="button" data-summary-link="accounts" aria-label="Open accounts and cards">
+      <div class="section-head"><h3>Accounts & cards</h3><span class="card-arrow">›</span></div>
+      <div class="account-mini-grid">
+        <div><span>Cash in hand</span><b>${money(acct.cashBalance)}</b></div>
+        <div><span>Bank / debit balance</span><b>${money(acct.bankBalance)}</b></div>
+        <div><span>Cash + bank</span><b class="positive">${money(acct.liquidBalance)}</b></div>
+        <div><span>Credit outstanding</span><b class="negative">${money(acct.creditUsed)}</b></div>
+        <div><span>Available credit</span><b>${money(acct.creditAvailable)}</b><small>Limit ${money(acct.creditLimit)}</small></div>
+      </div>
+    </button>
 
     <div class="section grid two dashboard-panels">
       <div class="card">
@@ -848,6 +926,78 @@ function reportsView(){
   return shell(content,'Reports','Budget vs actual, category trends and exportable records.');
 }
 
+function accountTypeLabel(t){ return ({debit:'Debit card',credit:'Credit card',bank:'Bank account',cash:country==='KW'?'Cash in hand':'Cash'})[t]||'Account'; }
+function accountCardHtml(a){
+  const credit=a.type==='credit';
+  const available=Math.max(0,n(a.creditLimit)-n(a.outstanding));
+  const usage=a.creditLimit?Math.min(100,n(a.outstanding)/n(a.creditLimit)*100):0;
+  return `<div class="account-card" data-edit-account="${escapeHtml(a.id)}"><div class="account-card-head"><div><div class="metric-label">${escapeHtml(accountTypeLabel(a.type))}</div><h3>${escapeHtml(a.name)}</h3><div class="subtle">${escapeHtml(a.issuer||'')}${a.last4?` · •••• ${escapeHtml(a.last4)}`:''}</div></div><span class="card-arrow">›</span></div>${credit?`<div class="account-values"><div><span>Credit limit</span><b>${money(a.creditLimit)}</b></div><div><span>Outstanding</span><b class="negative">${money(a.outstanding)}</b></div><div><span>Available</span><b class="positive">${money(available)}</b></div></div><div class="progress"><i class="${usage>=90?'over':usage>=75?'warning':''}" style="width:${clamp(usage,0,100)}%"></i></div>`:`<div class="account-balance"><span>${a.type==='cash'&&country==='KW'?'Cash in hand':'Current balance'}</span><b>${money(a.balance)}</b></div>`}<div class="subtle account-updated">Updated ${a.updatedAt?new Date(a.updatedAt).toLocaleString():'—'}</div></div>`;
+}
+function accountGroup(title,items,emptyText){
+  return `<div class="account-group"><div class="account-group-head"><h3>${title}</h3><span>${items.length} ${items.length===1?'account':'accounts'}</span></div><div class="accounts-grid">${items.length?items.map(accountCardHtml).join(''):`<div class="card empty"><b>${emptyText}</b>Use + Add account/card to create one.</div>`}</div></div>`;
+}
+function quickPrimaryAccount(type){
+  const list=countryAccounts('KW');
+  if(type==='cash') return list.find(a=>a.type==='cash')||null;
+  if(type==='bank') return list.find(a=>a.type==='bank')||list.find(a=>a.type==='debit')||null;
+  if(type==='credit') return list.find(a=>a.type==='credit')||null;
+  return null;
+}
+function upsertQuickAccount(type,values={}){
+  const now=new Date().toISOString();
+  let a=quickPrimaryAccount(type);
+  if(!a){
+    a={id:uid(),country:'KW',name:type==='cash'?'Cash in hand':type==='bank'?'Cash at bank':'Primary credit card',type:type==='bank'?'bank':type,balance:0,creditLimit:0,outstanding:0,issuer:'',last4:'',createdAt:now,updatedAt:now};
+    state.accounts.push(a);
+  }
+  if(type==='cash'||type==='bank') a.balance=n(values.balance);
+  if(type==='credit'){
+    a.creditLimit=Math.max(0,n(values.creditLimit));
+    a.outstanding=Math.max(0,n(values.outstanding));
+  }
+  a.updatedAt=now;
+  return a;
+}
+async function saveKuwaitQuickBalances(){
+  const cashEl=document.getElementById('quick-cash-balance');
+  const bankEl=document.getElementById('quick-bank-balance');
+  const limitEl=document.getElementById('quick-credit-limit');
+  const usedEl=document.getElementById('quick-credit-outstanding');
+  if(!cashEl||!bankEl||!limitEl||!usedEl) return;
+  upsertQuickAccount('cash',{balance:cashEl.value});
+  upsertQuickAccount('bank',{balance:bankEl.value});
+  upsertQuickAccount('credit',{creditLimit:limitEl.value,outstanding:usedEl.value});
+  await saveState();
+  queueCloudSync();
+  render();
+  toast('Kuwait cash, bank and credit-card values saved and queued for sync.');
+}
+function accountsView(){
+  const list=countryAccounts().sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name));
+  const sum=accountSummary();
+  const cash=list.filter(a=>a.type==='cash');
+  const bank=list.filter(a=>a.type==='bank'||a.type==='debit');
+  const credit=list.filter(a=>a.type==='credit');
+  const creditNote=`Limit ${money(sum.creditLimit)} · Outstanding ${money(sum.creditUsed)}`;
+  const primaryCash=country==='KW'?quickPrimaryAccount('cash'):null;
+  const primaryBank=country==='KW'?quickPrimaryAccount('bank'):null;
+  const primaryCredit=country==='KW'?quickPrimaryAccount('credit'):null;
+  const quickUpdate=country==='KW'?`<div class="section card quick-balance-card"><div class="section-head"><div><h3>Quick update — Kuwait balances</h3><div class="subtle">Update your main cash, bank balance and credit-card values here. Changes are saved locally immediately and synchronized to your signed-in devices.</div></div><span class="status-pill good">KWD</span></div><div class="form-grid quick-balance-grid"><div class="field"><label>Cash in hand (KWD)</label><input class="input" id="quick-cash-balance" type="number" step="0.001" value="${escapeHtml(primaryCash?.balance??0)}" placeholder="0.000" /></div><div class="field"><label>Cash at bank / debit balance (KWD)</label><input class="input" id="quick-bank-balance" type="number" step="0.001" value="${escapeHtml(primaryBank?.balance??0)}" placeholder="0.000" /></div><div class="field"><label>Credit-card limit (KWD)</label><input class="input" id="quick-credit-limit" type="number" min="0" step="0.001" value="${escapeHtml(primaryCredit?.creditLimit??0)}" placeholder="0.000" /></div><div class="field"><label>Credit-card outstanding (KWD)</label><input class="input" id="quick-credit-outstanding" type="number" min="0" step="0.001" value="${escapeHtml(primaryCredit?.outstanding??0)}" placeholder="0.000" /></div></div><div class="actions" style="margin-top:14px"><button class="btn primary" type="button" data-action="quick-balance-save">Save balances</button><button class="btn" type="button" data-action="cloud-sync">Sync now</button></div><div class="subtle" style="margin-top:10px">If you use multiple bank accounts or credit cards, use the detailed cards below to maintain each account separately. Quick update edits the primary account in each group.</div></div>`:'';
+  const content=`<div class="summary-grid accounts-summary"><div class="summary-card"><div class="summary-icon income">◉</div><div><div class="metric-label">Cash in hand</div><div class="summary-value positive">${money(sum.cashBalance)}</div><div class="summary-note">${countryMeta().name}</div></div></div><div class="summary-card"><div class="summary-icon income">▣</div><div><div class="metric-label">Bank / debit balance</div><div class="summary-value positive">${money(sum.bankBalance)}</div><div class="summary-note">Bank accounts + debit cards</div></div></div><div class="summary-card"><div class="summary-icon budget">◎</div><div><div class="metric-label">Cash + bank</div><div class="summary-value positive">${money(sum.liquidBalance)}</div><div class="summary-note">Liquid funds</div></div></div><div class="summary-card"><div class="summary-icon expense">↗</div><div><div class="metric-label">Credit available</div><div class="summary-value">${money(sum.creditAvailable)}</div><div class="summary-note">${creditNote}</div></div></div></div>${quickUpdate}<div class="section"><div class="section-head"><h3>${countryMeta().flag} ${countryMeta().name} money & cards</h3><button class="btn primary" type="button" data-action="add-account">+ Add account/card</button></div>${accountGroup(country==='KW'?'Cash in hand':'Cash',cash,country==='KW'?'No cash-in-hand balance added yet':'No cash balance added yet')}${accountGroup('Bank & debit cards',bank,'No bank account or debit card added yet')}${accountGroup('Credit cards',credit,'No credit card added yet')}</div>`;
+  return shell(content,'Accounts & cards',country==='KW'?'Kuwait view: cash in hand, bank/debit balances and credit cards are shown separately and can be updated quickly.':'Track cash, bank/debit balances and credit cards separately for India.');
+}
+function openAccountModal(id=null){
+  const existing=id?state.accounts.find(a=>a.id===id):null;
+  const a=existing?{...existing}:{id:'',country,name:'',type:'debit',balance:'',creditLimit:'',outstanding:'',issuer:'',last4:''};
+  modalRoot.innerHTML=`<div class="modal-backdrop" id="account-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="Account editor"><div class="modal-head"><div><h3>${existing?'Edit account/card':'Add account/card'}</h3><div class="subtle">${countryMeta().flag} ${countryMeta().name} · ${countryMeta().currency}</div></div><button class="btn icon" id="account-close">×</button></div><form id="account-form"><div class="modal-body"><div class="form-grid"><div class="field span2"><label>Name</label><input class="input" id="a-name" required value="${escapeHtml(a.name)}" placeholder="e.g. NBK Debit, Visa Platinum" /></div><div class="field"><label>Type</label><select class="select" id="a-type"><option value="debit" ${a.type==='debit'?'selected':''}>Debit card</option><option value="credit" ${a.type==='credit'?'selected':''}>Credit card</option><option value="bank" ${a.type==='bank'?'selected':''}>Bank account</option><option value="cash" ${a.type==='cash'?'selected':''}>Cash</option></select></div><div class="field"><label>Bank / issuer</label><input class="input" id="a-issuer" value="${escapeHtml(a.issuer)}" placeholder="Optional" /></div><div class="field"><label>Last 4 digits</label><input class="input" id="a-last4" inputmode="numeric" maxlength="4" value="${escapeHtml(a.last4)}" placeholder="1234" /></div><div class="field non-credit"><label>Current balance (${countryMeta().currency})</label><input class="input" id="a-balance" type="number" step="${countryMeta().decimals===3?'0.001':'0.01'}" value="${escapeHtml(a.balance)}" placeholder="0" /></div><div class="field credit-only"><label>Credit limit (${countryMeta().currency})</label><input class="input" id="a-limit" type="number" min="0" step="${countryMeta().decimals===3?'0.001':'0.01'}" value="${escapeHtml(a.creditLimit)}" placeholder="0" /></div><div class="field credit-only"><label>Outstanding balance (${countryMeta().currency})</label><input class="input" id="a-outstanding" type="number" min="0" step="${countryMeta().decimals===3?'0.001':'0.01'}" value="${escapeHtml(a.outstanding)}" placeholder="0" /></div></div></div><div class="modal-foot">${existing?'<button type="button" class="btn danger" id="account-delete">Delete</button>':''}<button type="button" class="btn" id="account-cancel">Cancel</button><button type="submit" class="btn primary">Save</button></div></form></div></div>`;
+  const toggle=()=>{const credit=document.getElementById('a-type').value==='credit';document.querySelectorAll('.credit-only').forEach(x=>x.style.display=credit?'grid':'none');document.querySelectorAll('.non-credit').forEach(x=>x.style.display=credit?'none':'grid');};
+  document.getElementById('a-type').addEventListener('change',toggle);toggle();
+  const close=()=>modalRoot.innerHTML='';
+  document.getElementById('account-close').addEventListener('click',close);document.getElementById('account-cancel').addEventListener('click',close);document.getElementById('account-backdrop').addEventListener('click',e=>{if(e.target.id==='account-backdrop')close();});
+  document.getElementById('account-form').addEventListener('submit',async e=>{e.preventDefault();const type=document.getElementById('a-type').value;const now=new Date().toISOString();const obj={id:existing?.id||uid(),country:existing?.country||country,name:document.getElementById('a-name').value.trim(),type,balance:type==='credit'?0:n(document.getElementById('a-balance')?.value),creditLimit:type==='credit'?Math.max(0,n(document.getElementById('a-limit')?.value)):0,outstanding:type==='credit'?Math.max(0,n(document.getElementById('a-outstanding')?.value)):0,issuer:document.getElementById('a-issuer').value.trim(),last4:document.getElementById('a-last4').value.replace(/\D/g,'').slice(-4),createdAt:existing?.createdAt||now,updatedAt:now};if(!obj.name){toast('Enter an account/card name.');return;}const idx=state.accounts.findIndex(x=>x.id===obj.id);if(idx>=0)state.accounts[idx]=obj;else state.accounts.push(obj);await saveState();queueCloudSync();close();render();toast(`${accountTypeLabel(type)} saved.`);});
+  if(existing) document.getElementById('account-delete').addEventListener('click',async()=>{if(!confirm('Delete this account/card?'))return;state.accounts=state.accounts.filter(x=>x.id!==existing.id);if(validUuid(existing.id))state.syncMeta.deletedAccounts.push({id:existing.id,deletedAt:new Date().toISOString()});await saveState();queueCloudSync();close();render();toast('Account/card deleted.');});
+}
+
 function settingsView(){
   const s=state.settings, cfg=getCloudConfig();
   const syncClass=cloudStatus.authenticated?'good':cloudStatus.configured?'warn':'';
@@ -875,6 +1025,7 @@ function settingsView(){
         <div class="actions"><button class="btn primary" type="button" data-action="statement-import">📄 Import statement</button></div>
         <div class="subtle" style="margin-top:10px">Files are processed temporarily in the browser and are not stored in cloud sync.</div>
       </div>
+      <div class="card"><h3>Accounts & cards</h3><p class="subtle">Track debit-card or bank balances and credit-card limits/outstanding amounts separately for Kuwait and India.</p><div class="actions"><button class="btn primary" type="button" data-nav="accounts">Open accounts</button></div></div>
       <div class="card about-card"><h3>About Rahman Expense</h3>
         <div class="about-line"><span>Application</span><b>Rahman Expense</b></div>
         <div class="about-line"><span>Version</span><b>v${APP_VERSION}</b></div>
@@ -901,7 +1052,7 @@ function settingsView(){
 }
 
 function render(){
-  const map={dashboard:dashboardView,transactions:transactionsView,budgets:budgetsView,reports:reportsView,settings:settingsView};
+  const map={dashboard:dashboardView,transactions:transactionsView,accounts:accountsView,budgets:budgetsView,reports:reportsView,settings:settingsView};
   app.innerHTML=(map[view]||dashboardView)();
   bindView();
 }
@@ -913,6 +1064,8 @@ function bindView(){
   document.querySelectorAll('[data-action="add"]').forEach(el=>el.addEventListener('click',()=>openTransactionModal()));
   document.querySelectorAll('[data-action="scan"]').forEach(el=>el.addEventListener('click',quickScanReceipt));
   document.querySelectorAll('[data-action="statement-import"]').forEach(el=>el.addEventListener('click',chooseStatementFile));
+  document.querySelectorAll('[data-action="add-account"]').forEach(el=>el.addEventListener('click',()=>openAccountModal()));
+  document.querySelectorAll('[data-edit-account]').forEach(el=>el.addEventListener('click',()=>openAccountModal(el.dataset.editAccount)));
   document.querySelectorAll('[data-edit-tx]').forEach(el=>el.addEventListener('click',ev=>{ev.stopPropagation();openTransactionModal(el.dataset.editTx)}));
   document.querySelectorAll('[data-open-tx]').forEach(el=>el.addEventListener('click',()=>openTransactionModal(el.dataset.openTx)));
   document.querySelectorAll('[data-summary-link]').forEach(el=>el.addEventListener('click',()=>openLinkedSection(el.dataset.summaryLink)));
@@ -957,6 +1110,7 @@ function bindView(){
   document.querySelectorAll('[data-action="cloud-create-account"]').forEach(el=>el.addEventListener('click',cloudCreateAccount));
   document.querySelectorAll('[data-action="cloud-sync"]').forEach(el=>el.addEventListener('click',()=>syncCloud(false)));
   document.querySelectorAll('[data-action="cloud-signout"]').forEach(el=>el.addEventListener('click',cloudSignOut));
+  document.querySelectorAll('[data-action="quick-balance-save"]').forEach(el=>el.addEventListener('click',saveKuwaitQuickBalances));
 
   for(const c of ['KW','IN']){ const opening=document.getElementById(`set-opening-${c}`); if(opening) opening.addEventListener('change',async e=>{state.settings.openingBalances[c]=n(e.target.value);markProfileDirty();await saveState();queueCloudSync();toast(`${COUNTRIES[c].name} opening balance saved.`);}); }
   const delRec=document.getElementById('set-delete-receipt'); if(delRec) delRec.addEventListener('change',async e=>{state.settings.deleteReceiptAfterSave=e.target.checked;await saveState();});
@@ -976,6 +1130,8 @@ function openLinkedSection(target,category=''){
     view='budgets';
   }else if(target==='reports'){
     view='reports';
+  }else if(target==='accounts'){
+    view='accounts';
   }else{
     view='dashboard';
   }

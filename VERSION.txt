@@ -1,1 +1,1 @@
-Rahman Expense v2.10 — Budget Persistence Fix + Groceries + Kuwait / India Separate Expenses — KWD / INR — Real-Time Sync
+Rahman Expense v2.13 — Quick Update Cash in Hand + Cash at Bank + Credit Limit — Kuwait KWD + India INR

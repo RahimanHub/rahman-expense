@@ -534,3 +534,43 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .country-tab > small { grid-column:2; margin-top:-4px; }
   .country-context { padding-left:3px; font-size:10px; }
 }
+
+/* Rahman Expense v2.12 — accounts, debit balances and credit limits */
+.account-overview-link{display:block;width:100%;margin-top:16px;text-align:left;color:inherit;cursor:pointer;border:1px solid var(--border);background:#fff}
+.account-mini-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.account-mini-grid>div{padding:10px 12px;border-radius:12px;background:#f7f9fc;border:1px solid #edf1f6}
+.account-mini-grid span,.account-values span,.account-balance span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
+.account-mini-grid b,.account-values b,.account-balance b{font-size:17px;color:var(--text)}
+.accounts-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.account-card{border:1px solid var(--border);border-radius:16px;padding:18px;background:#fff;box-shadow:0 7px 22px rgba(28,48,77,.055);cursor:pointer}
+.account-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.account-card-head h3{margin:4px 0 2px}
+.account-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:16px 0 12px}
+.account-values>div,.account-balance{padding:12px;border-radius:12px;background:#f7f9fc;border:1px solid #edf1f6}
+.account-balance{margin-top:16px}
+.account-balance b{font-size:24px}
+.account-updated{margin-top:10px;font-size:10px}
+.accounts-summary{margin-bottom:18px}
+@media (max-width:1050px){
+  .mobile-nav{grid-template-columns:repeat(6,1fr)}
+  .mobile-nav button{font-size:8px;min-width:0;padding-left:2px;padding-right:2px}
+  .mobile-nav button span{font-size:16px}
+  .account-mini-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .accounts-grid{grid-template-columns:1fr}
+}
+@media (max-width:390px){
+  .mobile-nav button{font-size:7px}
+  .mobile-nav button span{font-size:15px}
+  .account-values{grid-template-columns:1fr}
+}
+
+/* Rahman Expense v2.12 — Kuwait cash/bank/credit separation */
+.account-mini-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
+.account-mini-grid small{display:block;color:var(--muted);font-size:9px;margin-top:4px}
+.accounts-summary{grid-template-columns:repeat(4,minmax(0,1fr))}
+.account-group{margin-top:18px}
+.account-group-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 10px}
+.account-group-head h3{margin:0}
+.account-group-head span{color:var(--muted);font-size:11px}
+@media(max-width:1100px){.account-mini-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.accounts-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:720px){.account-mini-grid,.accounts-summary{grid-template-columns:1fr}.account-group{margin-top:14px}.account-group-head{padding:0 2px}}

@@ -1,4 +1,4 @@
--- Rahman Expense v2.8 cloud schema / migration
+-- Rahman Expense v2.12 cloud schema / migration
 -- Kuwait (KWD) and India (INR) are stored separately under one private account.
 -- Safe to run again in Supabase SQL Editor after earlier Rahman Expense versions.
 
@@ -149,3 +149,34 @@ end $$;
 
 -- Existing v2.7 and earlier cloud rows automatically remain Kuwait rows because
 -- the new country columns default to 'KW'. India starts completely separate.
+
+-- Rahman Expense v2.12 accounts & cards
+create table if not exists public.accounts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  country text not null default 'KW' check (country in ('KW','IN')),
+  name text not null,
+  account_type text not null check (account_type in ('debit','credit','bank','cash')),
+  balance numeric(14,3) not null default 0,
+  credit_limit numeric(14,3) not null default 0 check (credit_limit >= 0),
+  outstanding_balance numeric(14,3) not null default 0 check (outstanding_balance >= 0),
+  issuer text,
+  last4 text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists accounts_user_country_idx on public.accounts(user_id,country);
+alter table public.accounts enable row level security;
+drop policy if exists "accounts are private" on public.accounts;
+create policy "accounts are private" on public.accounts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop trigger if exists accounts_set_updated_at on public.accounts;
+create trigger accounts_set_updated_at before update on public.accounts for each row execute function public.ledgerly_set_updated_at();
+revoke all on table public.accounts from anon;
+grant select, insert, update, delete on table public.accounts to authenticated;
+alter table public.accounts replica identity full;
+do $$
+begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='accounts') then
+    execute 'alter publication supabase_realtime add table public.accounts';
+  end if;
+end $$;
