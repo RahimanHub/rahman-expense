@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 const APP_CURRENCY = 'KWD';
 const CURRENCY_DECIMALS = 3;
 const DB_NAME = 'rahman-expense-v2-db';
@@ -1003,6 +1003,17 @@ async function init(){
   render();
   window.addEventListener('online',()=>{ if(cloudStatus.authenticated) startRealtime(); });
   window.addEventListener('offline',()=>{ realtimeStatus='OFFLINE'; render(); });
-  if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+  // v2.2 deliberately runs without a service worker so GitHub Pages updates are immediate.
+  // Remove only legacy app caches/service workers; keep IndexedDB/localStorage expense data intact.
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter(k => k.startsWith('rahman-expense-')).map(k => caches.delete(k)));
+    }
+  } catch (_) {}
 }
 init();

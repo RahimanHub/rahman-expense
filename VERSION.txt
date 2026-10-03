@@ -1,1 +1,1 @@
-Rahman Expense v2.1 — Simple Password Login + Real-Time Sync KWD — GitHub Pages Ready
+Rahman Expense v2.2 — Simple Login + Cache-Free Real-Time Sync KWD — GitHub Pages Ready
